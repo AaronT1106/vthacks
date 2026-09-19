@@ -610,6 +610,39 @@ Make the Situation Map, Routes, and Incidents sidebar items functional while pre
 
 ---
 
+## Dynamic What Changed Feed — 2026-09-19
+
+### Request
+
+Make the existing incident feed respond to completed route analyses, rejected alternatives, confirmed hazards, and false-positive decisions using the active dashboard state.
+
+### Files Changed
+
+- `frontend/src/components/disaster-dashboard.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Completed route analysis now adds a timestamped recommendation event using the selected responder, requested destination, returned recommended destination, route name, time, distance, and risk.
+- The same analysis adds a separate timestamped rejection event using the alternative route and rejection reason from the actual mock response.
+- Confirm Hazard adds a timestamped event with the current hazard confidence, type, affected infrastructure, and evidence source.
+- Mark False Positive adds a timestamped operator-rejection event using the same current hazard details.
+- Repeating the same verification decision does not create duplicate feed entries.
+
+### Decisions
+
+- Reused the existing `changeEvents` state and `WhatChangedFeed` component so its animation, colors, five-item limit, and simulated-timeline label remain unchanged.
+- Marked every new event as mock/demo data in its title or detail.
+- Did not modify `what-changed-feed.tsx`, `disaster-map.tsx`, Mapbox configuration, mock fixtures, route-analysis logic, dependencies, backend files, or environment files.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
 ## Hazard Evidence and Human Verification — 2026-09-19
 
 ### Request
