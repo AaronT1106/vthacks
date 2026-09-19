@@ -89,12 +89,19 @@ export interface Route {
 export interface RouteRecommendation {
   role: ResponderMode
   routeName: string
+  recommendedDestination: string
   travelTime: string
   distance: string
   risk: Severity
   confidence: number
   priority: string
   explanation: string
+  hazardsAvoided: string[]
+  alternative: {
+    routeName: string
+    risk: Severity
+    rejectionReason: string
+  }
 }
 
 export interface RouteAnalysisRequest {
@@ -153,7 +160,7 @@ export const responderModes: Array<{
   { id: "civilian", label: "Civilian", shortDescription: "Lowest hazard exposure" },
   { id: "ambulance", label: "Ambulance", shortDescription: "Hospital access and response time" },
   { id: "firefighter", label: "Firefighter", shortDescription: "Emergency vehicle access" },
-  { id: "supply-vehicle", label: "Supply Vehicle", shortDescription: "Heavy vehicle clearance" },
+  { id: "supply-vehicle", label: "Supply Truck", shortDescription: "Heavy vehicle clearance" },
   {
     id: "emergency-coordinator",
     label: "Emergency Coordinator",

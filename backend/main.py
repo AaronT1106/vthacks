@@ -23,15 +23,24 @@ class RouteAnalysisRequest(BaseModel):
     responderType: ResponderMode
 
 
+class AlternativeRoute(BaseModel):
+    routeName: str
+    risk: Literal["LOW", "MEDIUM", "HIGH"]
+    rejectionReason: str
+
+
 class RouteRecommendation(BaseModel):
     role: ResponderMode
     routeName: str
+    recommendedDestination: str
     travelTime: str
     distance: str
     risk: Literal["LOW", "MEDIUM", "HIGH"]
     confidence: int = Field(ge=0, le=100)
     priority: str
     explanation: str
+    hazardsAvoided: list[str] = Field(default_factory=list)
+    alternative: AlternativeRoute
 
 
 class Route(BaseModel):
@@ -54,35 +63,39 @@ app = FastAPI(title="DisasterLens Mock Route API", version="0.1.0")
 def analyze_route(request: RouteAnalysisRequest) -> RouteAnalysisResponse:
     """Return preset demo metrics and illustrative geometry for known location IDs."""
     start = STARTING_POINTS[request.startingPoint]
-    destination = DESTINATIONS[request.destination]
+    requested_destination = DESTINATIONS[request.destination]
     profile = ROLE_PROFILES[request.responderType]
     route_name = profile["routeName"]
-    # These are illustrative corridors, not road-network paths or safety calculations.
-    if request.destination == "blacksburg-shelter":
-        corridor = [(-80.426, 37.233), (-80.4015, 37.233)]
-    else:
-        corridor = [(-80.426, 37.226), (-80.425, 37.2165), (-80.417, 37.2118)]
 
     recommendation = RouteRecommendation(
         role=request.responderType,
-        **profile,
+        routeName=route_name,
+        recommendedDestination=profile["recommendedDestination"],
+        travelTime=profile["travelTime"],
+        distance=profile["distance"],
+        risk=profile["risk"],
+        confidence=profile["confidence"],
+        priority=profile["priority"],
+        hazardsAvoided=profile.get("hazardsAvoided", []),
+        alternative=AlternativeRoute(**profile["alternative"]),
         explanation=(
-            f"Mock recommendation from {start['name']} to {destination['name']}: "
-            f"{route_name} illustrates a detour around the simulated Route 460 flood "
-            "and South Main bridge damage. "
-            f"The selected responder priority is {profile['priority'].lower()}. "
-            "Time, distance, risk, and confidence are preset demo values, not calculated "
-            "for this journey. Geometry is illustrative and not verified against roads. "
-            "Human verification is required before operational use."
+            f"{profile['selectionReason']} This is a mock recommendation from {start['name']} "
+            f"to {profile['recommendedDestination']}. The requested destination, "
+            f"{requested_destination['name']}, remains request context; metrics are preset demo values "
+            "and require human verification."
         ),
     )
     return RouteAnalysisResponse(
         **request.model_dump(),
         recommendation=recommendation,
         route=Route(
-            id=f"mock-{request.startingPoint}-{request.destination}-{request.responderType}",
+            id=f"mock-{request.startingPoint}-{request.responderType}",
             name=route_name,
             kind="safe",
-            coordinates=[start["coordinates"], *corridor, destination["coordinates"]],
+            coordinates=[
+                start["coordinates"],
+                *profile["routeCoordinates"],
+                profile["destinationCoordinates"],
+            ],
         ),
     )

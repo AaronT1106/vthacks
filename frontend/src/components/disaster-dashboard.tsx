@@ -62,6 +62,23 @@ export function DisasterDashboard() {
   const [analysisError, setAnalysisError] = useState("")
   const activeRequest = useRef<AbortController | null>(null)
 
+  const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
+  const displayedDestinationPlace: SelectedPlace | null = analysisResult && recommendedEndpoint
+    ? {
+        name: analysisResult.recommendation.recommendedDestination,
+        longitude: recommendedEndpoint[0],
+        latitude: recommendedEndpoint[1],
+        category: "Role-specific mock destination",
+        source: "mock",
+      }
+    : destinationPlace
+  const displayedDestinationType: DestinationType = analysisResult
+    ? responderMode === "civilian"
+      ? "shelter"
+      : responderMode === "ambulance"
+        ? "hospital"
+        : "custom"
+    : destinationType
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
   const searchProximity = useMemo<Coordinates>(() => startingPlace
     ? [startingPlace.longitude, startingPlace.latitude]
@@ -320,8 +337,8 @@ export function DisasterDashboard() {
               selectedHazardId={selectedHazard.id}
               onSelectHazard={handleHazardSelection}
               startingPlace={startingPlace}
-              destinationPlace={destinationPlace}
-              destinationType={destinationType}
+              destinationPlace={displayedDestinationPlace}
+              destinationType={displayedDestinationType}
             />
           </div>
 
