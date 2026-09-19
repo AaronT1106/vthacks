@@ -230,6 +230,39 @@ Define a minimal route-analysis contract, implement one FastAPI POST endpoint, a
 - `npm run build`: passed, including TypeScript and static generation. The sandboxed attempt compiled but hit `spawn EPERM` when starting the TypeScript worker; approved execution outside the sandbox succeeded.
 - `git diff --check`: passed.
 - Browser visual/interaction QA could not run because the computer-use inventory contained no connected browsers. Live HTTP and programmatic rendering checks were completed instead; mouse interaction and visual layout remain unverified in a browser.
+
+---
+
+## Role-Specific Route Analysis Details — 2026-09-19
+
+### Request
+
+Expand the existing Pathfinder AI mock route-analysis flow so each responder role receives a transparent, role-specific recommendation. Show the recommended route, metrics, avoided hazards, concise explanation, and one rejected alternative without changing the dashboard design, Mapbox configuration, environment files, or dependencies.
+
+### Files Changed
+
+- `backend/mock_data.py`: added explicit avoided hazards, selection reason, and rejected alternative for every responder role.
+- `backend/main.py`: extended the validated API response model and returned the new role-specific fields.
+- `backend/test_main.py`: verified complete responses for all journey/role combinations and distinct behavior for all five roles.
+- `frontend/src/data/mock-disaster-data.ts`: extended the shared TypeScript response type and renamed the visible Supply Vehicle label to Supply Truck.
+- `frontend/src/components/route-recommendation-panel.tsx`: displayed hazards avoided and the rejected alternative inside the existing results panel.
+- `README.md`: updated the API contract and role-specific mock behavior.
+- `PROMPT_LOG.md`: this entry.
+
+### Implementation and Decisions
+
+- Kept route-analysis decisions in the existing FastAPI mock endpoint. The frontend only displays the structured response.
+- Civilian prioritizes minimum exposure; ambulance prioritizes fast hospital access; firefighter prioritizes apparatus access; supply truck prioritizes heavy-vehicle clearance; emergency coordinator prioritizes network-wide awareness.
+- Every result explicitly lists the same two simulated hazards as avoided and returns one role-specific alternative with a risk level and a concrete rejection reason.
+- Metrics remain preset mock values and route geometry remains illustrative. Explanations state that human verification is required.
+- Preserved the existing dashboard and map behavior. No dependencies were added, and Mapbox configuration and `.env.local` were not modified.
+
+### Validation
+
+- `python -m unittest -v` from `backend/`: passed four tests, including all 20 supported start/destination/role combinations, request validation, and distinct role profiles.
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static page generation. The sandboxed build compiled but its TypeScript worker was blocked with `spawn EPERM`; the approved outside-sandbox retry passed.
+- `git diff --check`: passed before the prompt-log entry; line-ending warnings were informational.
 ## Mapbox Experience Upgrade
 
 ### Request
@@ -258,3 +291,78 @@ Improve only the existing DisasterLens map so a configured Mapbox token provides
 - `npm run build -- --webpack` passed and produced the static home route.
 - The development server loaded with the empty token, returned HTTP 200, rendered the `Demo Map · Mock Data` label, and did not enter the Mapbox loading path.
 - Live Mapbox rendering, pan/zoom, recentering, and responsive visual checks remain pending until a valid public token is added; browser automation was unavailable in this session.
+
+---
+
+## Route Recommendation Missing-Hazards Fix — 2026-09-19
+
+### Request
+
+Fix the runtime crash caused by `RouteRecommendationPanel` calling `.map()` when `hazardsAvoided` is missing. Confirm whether the issue came from field naming, incomplete mock data, or both, make the API contract consistent, add frontend safeguards, test the backend response, and preserve the existing design.
+
+### Cause
+
+- The checked-in FastAPI model, role fixtures, and TypeScript type all use the same camelCase `hazardsAvoided` field. There was no snake_case/camelCase mismatch in the current source.
+- All current responder fixtures include the array. The runtime failure was consistent with an incomplete or stale backend response from an older running server.
+- The frontend used a TypeScript cast for unvalidated JSON and called `.map()` without a runtime guard, so a missing field crashed the panel.
+
+### Files Changed
+
+- `backend/main.py`: made `hazardsAvoided` default to an empty list and used an empty-list fallback when a fixture omits it.
+- `backend/test_main.py`: verified the camelCase response key, array type for every role, absence of the snake_case variant, and empty-array behavior for an omitted fixture field.
+- `frontend/src/lib/route-analysis.ts`: normalized missing or invalid `hazardsAvoided` values to `[]`, supplied safe legacy alternative data, and rejected responses missing core recommendation or route objects.
+- `frontend/src/components/route-recommendation-panel.tsx`: added render-time fallbacks for hazards, risk, and alternative details, including an empty-state message.
+- `PROMPT_LOG.md`: this entry.
+
+### Decisions
+
+- Kept camelCase as the shared API contract because it already matches the existing frontend and documented endpoint.
+- Added safeguards in both the request boundary and the panel so stale or incomplete responses do not crash the UI.
+- Did not change role fixtures because all five already supply `hazardsAvoided` arrays.
+- Preserved the dashboard design and behavior. No dependencies, Mapbox files, environment files, or unrelated files were modified.
+
+### Validation
+
+- `python -m unittest -v` from `backend/`: passed five tests, including all 20 supported journey/role responses and the omitted-hazards empty-array case.
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation. The sandboxed attempt compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved outside-sandbox retry passed.
+- `git diff --check`: passed before the prompt-log update; line-ending warnings were informational.
+
+---
+
+## Deterministic Role-Specific Route Analysis — 2026-09-19
+
+### Request
+
+Make route analysis meaningfully different for civilians, ambulances, firefighters, supply trucks, and emergency coordinators while preserving the dashboard, Mapbox behavior, endpoint compatibility, and incomplete-response safeguards.
+
+### Files Changed
+
+- `backend/mock_data.py`: replaced shared-looking profiles with five complete role-specific targets, corridors, metrics, hazards, explanations, and rejected alternatives.
+- `backend/main.py`: selected role-specific destinations and geometry and added `recommendedDestination` to the existing recommendation response.
+- `backend/test_main.py`: proved every role returns distinct recommendation fields, risk/confidence combinations, destinations, and route geometry across all supported requests.
+- `frontend/src/data/mock-disaster-data.ts`: added `recommendedDestination` to the shared recommendation type.
+- `frontend/src/lib/route-analysis.ts`: retained incomplete-response normalization and added a safe fallback for the new destination field.
+- `frontend/src/components/route-recommendation-panel.tsx`: displayed the recommended destination without changing the panel structure.
+- `frontend/src/components/disaster-dashboard.tsx`: aligned the existing map destination marker with the returned role-specific route endpoint.
+- `README.md`: documented the additive response field and the five deterministic role rules.
+- `PROMPT_LOG.md`: this entry.
+
+### Role Rules and Decisions
+
+- Civilian uses the Shelter Safety Route to Blacksburg Community Shelter, prioritizing the largest buffer from all simulated hazards.
+- Ambulance uses the Hospital Priority Route to LewisGale Hospital, prioritizing short travel time without using the flooded approach.
+- Firefighter uses the Incident Access Route to Route 460 Incident Staging, favoring wider apparatus-access roads around blocked lanes.
+- Supply truck uses the Heavy Vehicle Supply Route to the Emergency Supply Depot, avoiding the damaged bridge, flood zone, and weight-restricted roads.
+- Emergency coordinator uses the Critical Access Loop to the Critical Infrastructure Access Hub, accepting medium mock risk to preserve access across the hospital, shelter, and incident corridors.
+- Every profile has a unique route name, recommended destination, time, distance, confidence, hazard list, explanation, alternative, and route geometry. Risk/confidence combinations are unique even where risk labels repeat.
+- The existing request and response fields remain available. The top-level requested `destination` is still echoed for compatibility; the additive `recommendation.recommendedDestination` identifies the role-selected target.
+- All values remain deterministic mock data. No live routing, real hazard detection, or autonomous dispatch logic was introduced.
+- No dependencies, environment files, or Mapbox configuration were changed.
+
+### Validation
+
+- `python -m unittest -v` from `backend/`: passed five tests, covering all 20 supported journey/role combinations, complete response fields, distinct role behavior, validation errors, and the empty `hazardsAvoided` safeguard.
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation. The sandboxed build compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved outside-sandbox retry passed.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.

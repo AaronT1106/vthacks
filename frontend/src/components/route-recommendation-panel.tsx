@@ -1,5 +1,5 @@
 import { motion } from "framer-motion"
-import { Clock3, Gauge, MapPinned, ShieldCheck } from "lucide-react"
+import { AlertTriangle, Check, Clock3, Gauge, MapPinned, ShieldCheck } from "lucide-react"
 import type { RouteRecommendation } from "@/src/data/mock-disaster-data"
 
 interface RouteRecommendationPanelProps {
@@ -48,6 +48,18 @@ export function RouteRecommendationPanel({
 
   if (!recommendation) return null
 
+  const hazardsAvoided = Array.isArray(recommendation.hazardsAvoided)
+    ? recommendation.hazardsAvoided
+    : []
+  const risk = ["LOW", "MEDIUM", "HIGH"].includes(recommendation.risk)
+    ? recommendation.risk
+    : "MEDIUM"
+  const alternative = recommendation.alternative ?? {
+    routeName: "Alternative unavailable",
+    risk: "HIGH" as const,
+    rejectionReason: "The route-analysis response did not include an alternative route.",
+  }
+
   return (
     <motion.section
       className="panel-section"
@@ -58,13 +70,14 @@ export function RouteRecommendationPanel({
     >
       <div className="section-heading-row">
         <h2 className="section-label">Current recommendation</h2>
-        <span className={`status-pill ${recommendation.risk === "LOW" ? "status-safe" : "text-amber-300"}`}>{recommendation.risk.toLowerCase()} risk</span>
+        <span className={`status-pill ${risk === "LOW" ? "status-safe" : "text-amber-300"}`}>{risk.toLowerCase()} risk</span>
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-4">
         <div>
           <p className="text-xs text-slate-500">Simulated recommendation</p>
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recommendation.routeName}</p>
+          <p className="mt-1 text-[11px] text-slate-400">To {recommendation.recommendedDestination}</p>
         </div>
         <span className="mock-badge">Mock data</span>
       </div>
@@ -72,7 +85,7 @@ export function RouteRecommendationPanel({
       <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800">
         <Metric icon={Clock3} label="Travel time" value={recommendation.travelTime} />
         <Metric icon={MapPinned} label="Distance" value={recommendation.distance} />
-        <Metric icon={Gauge} label="Risk" value={recommendation.risk} />
+        <Metric icon={Gauge} label="Risk" value={risk} />
         <Metric icon={ShieldCheck} label="Confidence" value={`${recommendation.confidence}%`} />
       </div>
 
@@ -80,6 +93,36 @@ export function RouteRecommendationPanel({
         <p className="section-label">Why this route?</p>
         <p className="mt-3 text-xs leading-5 text-slate-300">{recommendation.explanation}</p>
         <p className="mt-3 text-[11px] font-medium text-cyan-300">Priority: {recommendation.priority}</p>
+      </div>
+
+      <div className="mt-5 border-t border-slate-800 pt-4">
+        <p className="section-label">Hazards avoided</p>
+        <ul className="mt-3 space-y-2">
+          {hazardsAvoided.map((hazard) => (
+            <li key={hazard} className="flex items-center gap-2 text-xs text-emerald-300">
+              <Check className="size-3.5 shrink-0" aria-hidden="true" />
+              {hazard}
+            </li>
+          ))}
+          {hazardsAvoided.length === 0 && (
+            <li className="text-xs text-slate-500">No avoided hazards were provided.</li>
+          )}
+        </ul>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-amber-400/15 bg-amber-400/[0.04] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="flex items-center gap-2 text-xs font-medium text-slate-200">
+            <AlertTriangle className="size-3.5 text-amber-300" aria-hidden="true" />
+            Alternative: {alternative.routeName}
+          </p>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+            {alternative.risk} risk
+          </span>
+        </div>
+        <p className="mt-2 text-[11px] leading-4 text-slate-400">
+          {alternative.rejectionReason}
+        </p>
       </div>
     </motion.section>
   )

@@ -55,6 +55,14 @@ export function DisasterDashboard() {
     startingLocations.find((location) => location.id === startingLocationId) ?? startingLocations[0]
   const selectedDestination =
     destinations.find((location) => location.id === destinationId) ?? destinations[0]
+  const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
+  const displayedDestination = analysisResult && recommendedEndpoint
+    ? {
+        ...selectedDestination,
+        name: analysisResult.recommendation.recommendedDestination,
+        coordinates: recommendedEndpoint,
+      }
+    : selectedDestination
 
   useEffect(() => {
     return () => {
@@ -241,7 +249,7 @@ export function DisasterDashboard() {
               selectedHazardId={selectedHazard.id}
               onSelectHazard={handleHazardSelection}
               startingLocation={selectedStartingLocation}
-              destination={selectedDestination}
+              destination={displayedDestination}
             />
           </div>
 

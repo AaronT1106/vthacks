@@ -271,12 +271,23 @@ HTTP `200` returns:
 | --- | --- |
 | `startingPoint`, `destination`, `responderType` | Echo the validated request. |
 | `dataSource` | Always `"mock"`. |
-| `recommendation` | Existing `RouteRecommendation`: `role`, `routeName`, `travelTime` (e.g. `"8 min"`), `distance` (e.g. `"4.2 mi"`), `risk` (`LOW`, `MEDIUM`, `HIGH`), `confidence` (0–100), `priority`, `explanation`. |
-| `route` | Existing `Route`: `id`, `name`, `kind` (`"safe"` in this demo), and `coordinates` as `[longitude, latitude]` pairs, starting/ending at the selected locations. |
+| `recommendation` | Role-specific mock result containing `routeName`, `recommendedDestination`, `travelTime`, `distance`, `risk`, `confidence`, `priority`, `hazardsAvoided`, a concise `explanation`, and one rejected `alternative` with its risk and rejection reason. |
+| `route` | Existing `Route`: `id`, `name`, `kind` (`"safe"` in this demo), and role-specific mock `coordinates` as `[longitude, latitude]` pairs. |
 
 Python and TypeScript use the same camelCase field names. `safe` is a demo display
 category, not a verified safety claim. Metrics are role-specific fixtures, not
-calculated for the selected journey; roles share illustrative corridor geometry.
+calculated for the selected journey. Each responder role has an explicit priority,
+recommended destination, route geometry, avoided-hazard list, and rejected alternative:
+
+- Civilian: lowest-exposure route to the community shelter.
+- Ambulance: fast, safer access to LewisGale Hospital.
+- Firefighter: apparatus access to incident staging around blocked roads.
+- Supply truck: a heavy-vehicle route to the supply depot that avoids damaged infrastructure.
+- Emergency coordinator: a critical-access loop connecting the highest-impact infrastructure.
+
+The top-level `destination` still echoes the user's request for compatibility; the
+role-selected target is returned as `recommendation.recommendedDestination` and is
+used as the displayed mock route endpoint.
 No road-network routing, live hazard analysis, LLM inference, or dispatch is performed.
 Human verification is required before operational use. Request failures are shown
 in the results panel with a retry instruction; there is no silent local-result fallback.
