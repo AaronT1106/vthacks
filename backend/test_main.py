@@ -1,6 +1,8 @@
 """Run with: python -m unittest -v (from backend/)."""
 
 import unittest
+from datetime import date, datetime
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -127,6 +129,94 @@ class RouteAnalysisTests(unittest.TestCase):
         response = self.client.post("/api/analyze-route", content="{", headers={"Content-Type": "application/json"})
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.client.get("/api/analyze-route").status_code, 405)
+
+    def test_mock_satellite_imagery_returns_complete_pair_for_exact_bbox(self):
+        request = {
+            "bbox": [-80.43, 37.20, -80.39, 37.25],
+            "beforeDate": "2026-08-01",
+            "afterDate": "2026-08-05",
+        }
+        with patch.dict("os.environ", {"SATELLITE_IMAGERY_PROVIDER": "mock"}):
+            response = self.client.post("/api/satellite-imagery", json=request)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["provider"], "mock")
+        self.assertEqual(body["status"], "available")
+        self.assertEqual(body["bbox"], request["bbox"])
+        for image_type in ("before", "after"):
+            image = body[image_type]
+            self.assertEqual(image["bbox"], request["bbox"])
+            self.assertEqual(image["dataMode"], "demo")
+            self.assertIn("source", image)
+            self.assertIn("capturedAt", image)
+            self.assertIn("cloudCoverage", image)
+            self.assertIn("previewUrl", image)
+        self.assertLess(datetime.fromisoformat(body["before"]["capturedAt"]).date(), date(2026, 8, 1))
+        self.assertGreater(datetime.fromisoformat(body["after"]["capturedAt"]).date(), date(2026, 8, 5))
+
+    def test_copernicus_missing_credentials_returns_demo_fallback(self):
+        with patch.dict("os.environ", {
+            "SATELLITE_IMAGERY_PROVIDER": "copernicus",
+            "COPERNICUS_CLIENT_ID": "",
+            "COPERNICUS_CLIENT_SECRET": "",
+        }):
+            response = self.client.post(
+                "/api/satellite-imagery",
+                json={"bbox": [-80.43, 37.20, -80.39, 37.25]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["providerRequested"], "copernicus")
+        self.assertEqual(body["provider"], "mock")
+        self.assertEqual(body["status"], "fallback")
+        self.assertTrue(body["manualUploadRecommended"])
+        self.assertIn("unavailable", body["message"].lower())
+
+    @patch("satellite_imagery._search_copernicus")
+    @patch("satellite_imagery._copernicus_access_token", return_value="test-token")
+    def test_copernicus_returns_live_metadata_pair(self, _token, search):
+        search.side_effect = [
+            [{
+                "id": "before-item",
+                "properties": {"datetime": "2026-07-28T10:00:00Z", "eo:cloud_cover": 4.5},
+                "assets": {"thumbnail": {"href": "https://example.test/before.jpg"}},
+            }],
+            [{
+                "id": "after-item",
+                "properties": {"datetime": "2026-08-08T10:00:00Z", "eo:cloud_cover": 12.0},
+                "assets": {"preview": {"href": "https://example.test/after.jpg"}},
+            }],
+        ]
+        bbox = [-80.43, 37.20, -80.39, 37.25]
+        with patch.dict("os.environ", {"SATELLITE_IMAGERY_PROVIDER": "copernicus"}):
+            response = self.client.post(
+                "/api/satellite-imagery",
+                json={"bbox": bbox, "beforeDate": "2026-08-01", "afterDate": "2026-08-05"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["provider"], "copernicus")
+        self.assertEqual(body["status"], "available")
+        self.assertEqual(body["before"]["id"], "before-item")
+        self.assertEqual(body["after"]["id"], "after-item")
+        self.assertEqual(body["before"]["dataMode"], "live")
+        self.assertEqual(body["after"]["previewUrl"], "https://example.test/after.jpg")
+        self.assertFalse(body["manualUploadRecommended"])
+
+    def test_satellite_imagery_rejects_invalid_bounds_dates_and_fields(self):
+        invalid_requests = [
+            {"bbox": [-80.39, 37.20, -80.43, 37.25]},
+            {"bbox": [-181, 37.20, -80.39, 37.25]},
+            {"bbox": [-80.43, 37.20, -80.39]},
+            {"bbox": [-80.43, 37.20, -80.39, 37.25], "beforeDate": "2026-08-05", "afterDate": "2026-08-01"},
+            {"bbox": [-80.43, 37.20, -80.39, 37.25], "unexpected": True},
+        ]
+        for request in invalid_requests:
+            with self.subTest(request=request):
+                self.assertEqual(self.client.post("/api/satellite-imagery", json=request).status_code, 422)
 
 
 if __name__ == "__main__":

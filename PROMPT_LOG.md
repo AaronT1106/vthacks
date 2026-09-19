@@ -785,3 +785,51 @@ Insert a frontend-only Imagery step after confirmed area selection, retain decod
 - Browser-only upload, drag/drop, preview, modal, Mapbox pointer, and responsive checks remain pending because no connected browser was available.
 - `git diff --check`: passed before this log entry.
 - No backend, dependency manifest, environment, storage, satellite, AI, or route-analysis files were changed.
+## Automated Satellite Imagery Metadata Retrieval — 2026-09-19
+
+### Request
+
+Add a server-side satellite imagery search for the selected bounding box, populate the existing Before and After imagery panels with typed metadata, preserve manual uploads, and support an immediate mock mode plus an optional Copernicus catalog provider.
+
+### Files Created
+
+- `backend/.env.example`
+- `backend/satellite_imagery.py`
+- `frontend/src/lib/satellite-imagery.ts`
+
+### Files Modified
+
+- `README.md`
+- `backend/main.py`
+- `backend/test_main.py`
+- `frontend/next.config.ts`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Added `POST /api/satellite-imagery` with validated `[minLng, minLat, maxLng, maxLat]` bounds and optional before/after dates.
+- Added a deterministic mock provider that returns clearly labeled demo metadata without credentials or image downloads.
+- Added a small Copernicus adapter that authenticates with server-only credentials, searches the Sentinel Hub catalog for scenes intersecting the exact bounds, prefers lower cloud cover, and uses only safe HTTPS quicklook URLs.
+- Live-provider authentication, network, incomplete-pair, and configuration failures return a useful typed mock fallback while leaving manual upload available.
+- Added a frontend API utility with runtime response validation and exact-bound checks.
+- Added a Fetch available satellite imagery action that fills the existing Before and After panels with source, capture time, cloud cover, preview availability, and live/demo labels.
+- Preserved replacement and removal through the existing local manual-upload workflow.
+- Documented local provider configuration in `README.md`; secrets remain in ignored `backend/.env` and are never exposed through `NEXT_PUBLIC_` variables.
+- Added backend tests for mock results, Copernicus results, provider fallback, bounding-box validation, date validation, and extra request fields.
+
+### Decisions
+
+- Metadata and remote quicklook URLs are returned instead of downloading large source imagery.
+- Mock mode is the default so the workflow works immediately. Setting `SATELLITE_IMAGERY_PROVIDER=copernicus` enables the live catalog adapter.
+- Before searches end before the selected before-date boundary, and after searches begin after the selected after-date boundary.
+- Missing previews or cloud cover above 40 percent recommends review or manual upload without hiding otherwise useful metadata.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript checks and static generation.
+- `python -m pytest backend/test_main.py`: passed (9 tests).
+- `git diff --check`: passed before this log entry.
+
+---

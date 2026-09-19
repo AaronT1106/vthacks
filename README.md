@@ -294,6 +294,35 @@ in the results panel with a retry instruction; there is no silent local-result f
 
 Run backend checks from `backend/` with `python -m unittest -v`.
 
+### Satellite Imagery Metadata
+
+After confirming a disaster-area rectangle, the imagery step can request before/after
+satellite metadata for the exact bounding box through `POST /api/satellite-imagery`.
+The browser sends coordinates in `[minLng, minLat, maxLng, maxLat]` order and may
+include optional `beforeDate` and `afterDate` values. Manual PNG, JPG, and WEBP
+uploads remain available if provider imagery is missing, delayed, too cloudy, or
+does not include a displayable quicklook.
+
+The backend defaults to deterministic mock metadata and requires no credentials.
+To enable the Copernicus adapter:
+
+1. Copy `backend/.env.example` to `backend/.env`.
+2. Set `SATELLITE_IMAGERY_PROVIDER=copernicus`.
+3. Add the server-side `COPERNICUS_CLIENT_ID` and `COPERNICUS_CLIENT_SECRET` from
+   a Copernicus Data Space OAuth client.
+4. Restart FastAPI. Keep `backend/.env` local; it is ignored by Git.
+
+The adapter authenticates on the backend, searches the Copernicus Sentinel Hub
+STAC catalog for Sentinel-2 L2A items intersecting the selected bounds, separates
+the before and after date windows, and prefers the lowest reported cloud cover.
+It returns metadata and safe HTTPS quicklook links when the catalog provides them;
+it does not download imagery into the repository. If credentials are absent, the
+provider request fails, or a complete pair is unavailable, the endpoint returns a
+typed demo fallback and recommends manual upload. See the official
+[Copernicus Catalog API](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Catalog.html)
+and [OAuth client authentication](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Overview/Authentication.html)
+documentation for provider details.
+
 ## Stretch Features
 
 - Automatic georeferencing

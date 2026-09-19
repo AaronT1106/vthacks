@@ -1,11 +1,13 @@
 """Minimal mock route-analysis API. No live routing or AI inference is performed."""
 
+from datetime import date, datetime
 from typing import Literal
 
 from fastapi import FastAPI
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
+from satellite_imagery import retrieve_satellite_imagery
 
 ResponderMode = Literal[
     "civilian", "ambulance", "firefighter", "supply-vehicle", "emergency-coordinator"
@@ -56,6 +58,44 @@ class RouteAnalysisResponse(RouteAnalysisRequest):
     route: Route
 
 
+class SatelliteImageryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bbox: tuple[float, float, float, float]
+    beforeDate: date | None = None
+    afterDate: date | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds_and_dates(self):
+        min_lng, min_lat, max_lng, max_lat = self.bbox
+        if not (-180 <= min_lng < max_lng <= 180 and -90 <= min_lat < max_lat <= 90):
+            raise ValueError("bbox must be [minLng, minLat, maxLng, maxLat] with valid ordered coordinates")
+        if self.beforeDate and self.afterDate and self.beforeDate >= self.afterDate:
+            raise ValueError("beforeDate must be earlier than afterDate")
+        return self
+
+
+class SatelliteImageMetadata(BaseModel):
+    id: str
+    source: str
+    capturedAt: datetime
+    cloudCoverage: float | None = Field(default=None, ge=0, le=100)
+    previewUrl: str | None = None
+    dataMode: Literal["live", "demo"]
+    bbox: tuple[float, float, float, float]
+
+
+class SatelliteImageryResponse(BaseModel):
+    provider: Literal["mock", "copernicus"]
+    providerRequested: Literal["mock", "copernicus"]
+    status: Literal["available", "fallback", "unavailable"]
+    message: str
+    bbox: tuple[float, float, float, float]
+    before: SatelliteImageMetadata | None
+    after: SatelliteImageMetadata | None
+    manualUploadRecommended: bool
+
+
 app = FastAPI(title="DisasterLens Mock Route API", version="0.1.0")
 
 
@@ -99,3 +139,14 @@ def analyze_route(request: RouteAnalysisRequest) -> RouteAnalysisResponse:
             ],
         ),
     )
+
+
+@app.post("/api/satellite-imagery", response_model=SatelliteImageryResponse)
+def satellite_imagery(request: SatelliteImageryRequest) -> SatelliteImageryResponse:
+    """Return before/after satellite metadata for the exact requested WGS84 bounds."""
+    response = retrieve_satellite_imagery(
+        list(request.bbox),
+        request.beforeDate,
+        request.afterDate,
+    )
+    return SatelliteImageryResponse.model_validate(response)

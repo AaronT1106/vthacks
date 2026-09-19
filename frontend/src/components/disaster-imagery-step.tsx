@@ -1,14 +1,15 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ArrowLeft, ArrowRight, ImagePlus, Radar, Trash2, Upload } from "lucide-react"
+import { ArrowLeft, ArrowRight, Cloud, ImagePlus, Radar, RefreshCw, Satellite, Trash2, Upload } from "lucide-react"
 import { motion } from "framer-motion"
 import { WorkflowProgress } from "@/src/components/workflow-progress"
+import { fetchSatelliteImagery, type SatelliteImageMetadata } from "@/src/lib/satellite-imagery"
 import type { DisasterAreaBounds, SelectedPlace } from "@/src/data/mock-disaster-data"
 
 export interface DisasterImagery {
-  beforeImage: File | null
-  afterImage: File | null
+  beforeImage: File | SatelliteImageMetadata | null
+  afterImage: File | SatelliteImageMetadata | null
 }
 
 interface DisasterImageryStepProps {
@@ -29,6 +30,10 @@ function isSupportedImage(file: File) {
   return file.type === "" && supportedExtensions.some((extension) => file.name.toLowerCase().endsWith(extension))
 }
 
+function isLocalFile(image: File | SatelliteImageMetadata): image is File {
+  return image instanceof File
+}
+
 function LocalImagePreview({ file, title, onError }: { file: File; title: string; onError: () => void }) {
   const [url] = useState(() => URL.createObjectURL(file))
   useEffect(() => () => URL.revokeObjectURL(url), [url])
@@ -44,14 +49,14 @@ function ImageUploadPanel({
   id,
   title,
   description,
-  file,
-  onFileChange,
+  image,
+  onImageChange,
 }: {
   id: string
   title: string
   description: string
-  file: File | null
-  onFileChange: (file: File | null) => void
+  image: File | SatelliteImageMetadata | null
+  onImageChange: (image: File | SatelliteImageMetadata | null) => void
 }) {
   const input = useRef<HTMLInputElement>(null)
   const pendingUrl = useRef<string | null>(null)
@@ -94,7 +99,7 @@ function ImageUploadPanel({
     image.onload = () => {
       clearPendingPreview()
       setError("")
-      onFileChange(nextFile)
+      onImageChange(nextFile)
     }
     image.onerror = () => {
       clearPendingPreview()
@@ -138,30 +143,60 @@ function ImageUploadPanel({
         }}
       />
 
-      {file ? (
+      {image ? (
         <div>
           <div className="grid h-64 place-items-center overflow-hidden rounded-lg border border-slate-800 bg-[#070b12] sm:h-72">
-            <LocalImagePreview
-              key={`${file.name}-${file.size}-${file.lastModified}-${file.type}`}
-              file={file}
-              title={title}
-              onError={() => {
-                setError("This image could not be previewed. Please choose another file.")
-                onFileChange(null)
-              }}
-            />
+            {isLocalFile(image) ? (
+              <LocalImagePreview
+                key={`${image.name}-${image.size}-${image.lastModified}-${image.type}`}
+                file={image}
+                title={title}
+                onError={() => {
+                  setError("This image could not be previewed. Please choose another file.")
+                  onImageChange(null)
+                }}
+              />
+            ) : image.previewUrl ? (
+              // Provider quicklooks are displayed directly and are never stored in this repository.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={image.previewUrl}
+                alt={`${title} satellite quicklook`}
+                className="h-full w-full object-contain"
+                onError={() => setError("The provider quicklook is unavailable. Metadata remains usable or upload a local image.")}
+              />
+            ) : (
+              <div className="px-6 text-center">
+                <Satellite className="mx-auto size-8 text-cyan-400/70" aria-hidden="true" />
+                <p className="mt-3 text-sm font-medium text-slate-300">Preview unavailable</p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-600">Provider metadata is available. Upload a local image if visual review is required.</p>
+              </div>
+            )}
           </div>
-          <p className="mt-3 truncate text-xs text-slate-300" title={file.name}>{file.name}</p>
+          {isLocalFile(image) ? (
+            <p className="mt-3 truncate text-xs text-slate-300" title={image.name}>{image.name}</p>
+          ) : (
+            <div className="mt-3 space-y-1 text-[11px] text-slate-400">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-xs font-medium text-slate-200" title={image.source}>{image.source}</p>
+                <span className={image.dataMode === "live" ? "live-badge" : "mock-badge"}>
+                  {image.dataMode === "live" ? "Live provider" : "Demo data"}
+                </span>
+              </div>
+              <p>Captured {new Date(image.capturedAt).toLocaleString()}</p>
+              <p>Cloud coverage: {image.cloudCoverage === null ? "Not available" : `${image.cloudCoverage.toFixed(1)}%`}</p>
+            </div>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <button type="button" className="area-secondary-button" onClick={() => input.current?.click()}>
-              <Upload className="size-4" aria-hidden="true" /> Replace
+              <Upload className="size-4" aria-hidden="true" /> Replace manually
             </button>
             <button
               type="button"
               className="area-secondary-button"
               onClick={() => {
                 setError("")
-                onFileChange(null)
+                onImageChange(null)
               }}
             >
               <Trash2 className="size-4" aria-hidden="true" /> Remove
@@ -196,8 +231,33 @@ export function DisasterImageryStep({
   onBack,
   onContinue,
 }: DisasterImageryStepProps) {
+  const [beforeDate, setBeforeDate] = useState("")
+  const [afterDate, setAfterDate] = useState("")
+  const [fetching, setFetching] = useState(false)
+  const [fetchMessage, setFetchMessage] = useState("")
+  const [fetchError, setFetchError] = useState("")
   const validBounds = bounds.east > bounds.west && bounds.north > bounds.south
   const canContinue = validBounds && Boolean(imagery.beforeImage && imagery.afterImage)
+
+  async function retrieveAvailableImagery() {
+    if (!validBounds || fetching) return
+    setFetching(true)
+    setFetchError("")
+    setFetchMessage("")
+    try {
+      const result = await fetchSatelliteImagery({ bounds, beforeDate, afterDate })
+      if (!result.before || !result.after) {
+        setFetchError(`${result.message} Upload both images manually to continue.`)
+        return
+      }
+      onImageryChange({ beforeImage: result.before, afterImage: result.after })
+      setFetchMessage(result.message)
+    } catch (error) {
+      setFetchError(error instanceof Error ? error.message : "Satellite imagery lookup failed. Use manual upload.")
+    } finally {
+      setFetching(false)
+    }
+  }
 
   return (
     <motion.main
@@ -229,20 +289,62 @@ export function DisasterImageryStep({
           </div>
         </div>
 
+        <section className="mb-5 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-4 sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-xl">
+              <div className="flex items-center gap-2">
+                <Satellite className="size-4 text-cyan-300" aria-hidden="true" />
+                <h2 className="text-sm font-semibold text-white">Automatic satellite lookup</h2>
+                <span className="mock-badge">Provider or demo</span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-slate-400">
+                Search the configured provider for low-cloud imagery intersecting the exact selected bounds. Dates are optional.
+              </p>
+              <p className="mt-2 font-mono text-[10px] text-slate-600">
+                [{bounds.west.toFixed(5)}, {bounds.south.toFixed(5)}, {bounds.east.toFixed(5)}, {bounds.north.toFixed(5)}]
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
+              <label className="space-y-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                Before cutoff
+                <input type="date" className="field-control block" value={beforeDate} onChange={(event) => setBeforeDate(event.target.value)} />
+              </label>
+              <label className="space-y-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                After start
+                <input type="date" className="field-control block" value={afterDate} onChange={(event) => setAfterDate(event.target.value)} />
+              </label>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button type="button" className="area-primary-button" disabled={!validBounds || fetching} onClick={() => void retrieveAvailableImagery()}>
+              <RefreshCw className={`size-4 ${fetching ? "animate-spin" : ""}`} aria-hidden="true" />
+              {fetching ? "Searching provider…" : "Fetch available satellite imagery"}
+            </button>
+            <p className="flex items-center gap-1.5 text-[10px] text-slate-600">
+              <Cloud className="size-3.5" aria-hidden="true" /> Low cloud cover preferred when available
+            </p>
+          </div>
+          <p className="mt-3 text-[10px] leading-4 text-slate-600">
+            Provider imagery can be unavailable, delayed, too cloudy, or missing a quicklook. Manual upload remains available below.
+          </p>
+          {fetchMessage && <p className="mt-3 text-xs leading-5 text-emerald-300" role="status">{fetchMessage}</p>}
+          {fetchError && <p className="mt-3 text-xs leading-5 text-amber-300" role="alert">{fetchError}</p>}
+        </section>
+
         <div className="grid gap-4 lg:grid-cols-2">
           <ImageUploadPanel
             id="before-disaster-image"
             title="Before disaster"
             description="Upload an image showing this area before the disaster."
-            file={imagery.beforeImage}
-            onFileChange={(beforeImage) => onImageryChange({ ...imagery, beforeImage })}
+            image={imagery.beforeImage}
+            onImageChange={(beforeImage) => onImageryChange({ ...imagery, beforeImage })}
           />
           <ImageUploadPanel
             id="after-disaster-image"
             title="After disaster"
             description="Upload an image showing this area after the disaster."
-            file={imagery.afterImage}
-            onFileChange={(afterImage) => onImageryChange({ ...imagery, afterImage })}
+            image={imagery.afterImage}
+            onImageChange={(afterImage) => onImageryChange({ ...imagery, afterImage })}
           />
         </div>
 
