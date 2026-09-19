@@ -918,3 +918,143 @@ Resolve the active rebase conflicts while preserving satellite imagery metadata 
 - `git diff --check`: passed before this log entry.
 - Browser interaction checks remain pending because no connected browser was available.
 - No dependencies, environment values, CORS, fake imagery files, or damage detections were added.
+
+---
+
+## Geospatial Intelligence Globe Intro — 2026-09-19
+
+### Request
+
+Redesign the existing React Three Fiber intro into a restrained black-and-cyan geospatial globe with recognizable dotted continents, satellite activity, illustrative geographic signals, camera movement, reduced-motion support, and a safe WebGL fallback.
+
+### Files Changed
+
+- `frontend/src/components/three-dimensional-globe.tsx`
+- `frontend/public/data/natural-earth-land-110m.svg`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Added a compact local mask derived from the public-domain Natural Earth 1:110m land dataset; the application performs no runtime geographic network request.
+- Samples deterministic Fibonacci-sphere candidates against the mask once per intro mount and creates one reusable `THREE.Points` continent geometry with deterministic cyan color variation.
+- Added a nearly black base sphere, restrained BackSide atmosphere, deterministic stars, three orbit paths, moving satellite indicators, six illustrative pulses, two sparse data arcs, a scan ring, and three background telemetry streak events using the existing Three.js and React Three Fiber dependencies.
+- Added slow delta-based rotation, subtle ref-driven pointer parallax, and a final weighted transition that removes rotation/parallax influence before orienting toward North America and moving the camera closer.
+- Preserved the public `onComplete()` interface and routed automatic completion, Skip intro, and fallback Continue through one guarded callback with timer cleanup.
+- Added reduced-motion behavior and Canvas/error-boundary DOM fallback without changing Area Selection or any later application workflow.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: blocked by the existing Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including an approved retry outside the sandbox.
+- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
+- A connected browser was unavailable, so visual timing, pointer, reduced-motion, WebGL-fallback, mobile, and intro-to-Area interaction checks remain pending.
+- No backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, dependency manifest, or global-style files were changed.
+
+---
+
+## Realistic NASA Earth Intro — 2026-09-19
+
+### Request
+
+Replace the dotted globe as the primary intro Earth with a realistic, naturally colored planet while retaining restrained DisasterLens satellite and geographic-intelligence overlays.
+
+### Files Changed
+
+- `frontend/src/components/three-dimensional-globe.tsx`
+- `frontend/public/earth/nasa-blue-marble-2048.jpg`
+- `frontend/public/earth/nasa-clouds-2048.jpg`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Replaced the point-cloud land surface with NASA Visible Earth 2048×1024 Blue Marble imagery on a lit `MeshStandardMaterial` sphere.
+- Added NASA's 2048×1024 Blue Marble cloud composite as the alpha map for a separate transparent cloud sphere rotating slightly faster than the surface.
+- Added warm directional sunlight, restrained ambient fill, a subtle BackSide atmosphere, and a dark loading sphere while core textures decode.
+- Delayed the automatic completion timer until both required local textures are loaded; Skip and fallback Continue retain the same guarded completion callback.
+- Retained deterministic stars, subtle orbit paths and satellite indicators, four illustrative observation pulses, sparse arcs, scan, and background telemetry streaks.
+- Reduced the realistic Earth's rotation speed and retained the final transition that removes normal rotation and pointer influence before moving toward North America.
+- Removed the now-unused Natural Earth dotted-globe mask after confirming it had no remaining runtime reference.
+
+### Asset Source and Usage
+
+- Surface: NASA Visible Earth, Blue Marble `land_ocean_ice_2048.jpg`.
+- Clouds: NASA Visible Earth, Blue Marble `cloud_combined_2048.jpg`.
+- NASA states that its imagery is generally not subject to copyright in the United States and permits informational and educational web use under its media usage guidelines; NASA is acknowledged here as the source and no endorsement is implied.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: blocked by the existing Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including an approved retry outside the sandbox.
+- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
+- Browser visual checks remain pending because no connected browser was available.
+- No dependency, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.
+
+---
+
+## Cinematic Earth Clarity and Lighting — 2026-09-19
+
+### Request
+
+Refine only the realistic intro Earth so its surface is clearer, the day/night division is more cinematic, and the planet blends more naturally into space while preserving the intro lifecycle and every post-intro workflow.
+
+### Files Changed
+
+- `frontend/src/components/three-dimensional-globe.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Applied mipmapped linear filtering and renderer-supported anisotropy, capped at 16, to the existing local NASA surface and cloud textures.
+- Raised the Canvas device-pixel-ratio ceiling from 1.5 to 2 and modestly increased globe geometry resolution for cleaner Retina rendering.
+- Reduced cloud opacity and separation from the surface so continents and oceans remain crisp beneath recognizable cloud shapes.
+- Rebalanced the warm directional sun, cool ambient fill, and night-side point light to create a clearer illuminated hemisphere and terminator while retaining readable shadow detail.
+- Removed metallic surface response, refined roughness, narrowed and softened the atmosphere, and reduced the component-local radial glow so Earth sits naturally in black space without a heavy cyan halo.
+- Lowered the visual prominence of orbit paths, satellites, geographic signals, arcs, scan, and telemetry streaks while preserving their existing timing and behavior.
+- Preserved rotation speed, final North America orientation, reduced-motion behavior, loading and WebGL fallbacks, guarded Skip/automatic completion, and the public `onComplete()` interface.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: remained blocked by the known Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including the approved outside-sandbox retry.
+- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
+- `git diff --check`: passed before this log entry.
+- Browser visual checks for texture sharpness, terminator balance, atmosphere, overlays, and the intro-to-Area transition remain pending because no connected browser was available.
+- No local Earth assets, dependencies, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.
+
+---
+
+## Fixed-Sun Day/Night Earth Shader — 2026-09-19
+
+### Request
+
+Make the intro Earth read immediately as a real planet viewed from space, with roughly half the visible globe in daylight, a curved diagonal terminator, a much darker readable night side, matching cloud illumination, and a thin atmospheric limb.
+
+### Files Changed
+
+- `frontend/src/components/three-dimensional-globe.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Replaced the Earth and cloud `MeshStandardMaterial` instances with compact local shader materials driven by one fixed normalized world-space sun direction.
+- Calculated illumination from the dot product of the world-space surface normal and world-space sun direction, with a narrow smoothstep transition around zero for the terminator.
+- Verified the globe hierarchy uses rotations and uniform scaling only, so the normalized model-matrix normal transform includes the actual globe rotation and remains valid for both Earth and clouds.
+- Kept the NASA surface texture in sRGB color space and applied lighting in linear space before Three.js tone-mapping and output-color-space shader chunks.
+- Rendered the night side from a low surface-texture contribution plus a blue-black tint rather than ambient scene lighting.
+- Confirmed the NASA cloud JPEG has three color channels and derived cloud opacity from RGB luminance. Cloud brightness uses the same fixed-sun calculation as Earth.
+- Replaced the broad atmosphere shell with a thin view-dependent Fresnel rim and removed obsolete scene lights.
+- Preserved the existing anisotropy cap, mipmap filters, DPR range, geometry, rotation, camera sequence, overlays, reduced-motion behavior, fallback, and guarded completion path.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: remained blocked by the known Turbopack CSS-worker port-binding restriction (`Operation not permitted`).
+- `npm run build -- --webpack`: passed, including shader source bundling, TypeScript, static generation, and production optimization.
+- The existing frontend development server compiled the update and returned HTTP 200.
+- `git diff --check`: passed before this log entry.
+- Browser control was unavailable, so opening-frame sun direction, visible lit fraction, terminator composition, final rendered color balance, WebGL shader runtime output, cloud appearance, Fresnel limb, rotation, Skip, reduced-motion, and intro-to-Area visual checks remain pending.
+- No assets, dependencies, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.
