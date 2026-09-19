@@ -156,3 +156,35 @@ The hackathon MVP will focus on one complete workflow:
 - Databricks handles large-scale ingestion, processing, model tracking, and data fusion when integrated.
 - The LLM turns structured results into understandable explanations.
 - Human operators review and approve high-impact recommendations.
+
+---
+
+## DisasterLens Frontend MVP Dashboard
+
+### Request
+
+Build the initial frontend-only DisasterLens dashboard and simulated route-analysis demo without changing the backend or adding dependencies.
+
+### Files Changed
+
+- Replaced the starter page and global styling in `frontend/app/`.
+- Added focused dashboard components in `frontend/src/components/`.
+- Added centralized typed mock data in `frontend/src/data/mock-disaster-data.ts`.
+- Updated `README.md` with setup, Mapbox, and demo instructions.
+
+### Implemented
+
+- Added a responsive dark mission-control dashboard with an incident header, route controls, dominant map, and intelligence panel.
+- Added role-specific mock recommendations, simulated analysis feedback, hazard details, working layer toggles, live-source statuses, and an animated What Changed feed.
+- Added Mapbox support through optional `NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN` plus a fully interactive local fallback map.
+- Added a short React Three Fiber globe introduction with reduced-motion support and a skip control.
+- Kept all simulated disaster information visibly labeled as mock data and left the backend unchanged.
+
+### Validation
+
+- `npm run lint` passed after removing one unused import.
+- `npx tsc --noEmit` passed.
+- `npm run build -- --webpack` passed and produced a static home route.
+- The local development server compiled the home page and returned HTTP 200.
+- The default Turbopack build could not complete in the sandbox because its CSS worker was not permitted to bind a local port; the Webpack production build passed instead.
+- Browser-based visual QA could not be completed because no browser connection was available in the session.

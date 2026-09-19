@@ -209,6 +209,27 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+The dashboard works immediately with a local mock-map fallback. To use Mapbox,
+create `frontend/.env.local` and add a public Mapbox token:
+
+```text
+NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN=your_public_token
+```
+
+Never commit the token or `.env.local` file.
+
+### Frontend Demo
+
+All visible disaster information is clearly labeled mock data. The frontend does
+not call live APIs or calculate real emergency routes.
+
+1. Let the short globe introduction complete or select **Skip intro**.
+2. Choose a starting point, destination, and responder type.
+3. Select **Analyze route** to simulate a safer-route recommendation.
+4. Toggle map layers to inspect hazards, risk, facilities, and routes.
+5. Select a flood or bridge-damage marker to inspect its evidence.
+6. Change responder type to see how the mock recommendation changes.
+
 ### Backend
 
 ```powershell
@@ -236,4 +257,8 @@ The backend startup command will be added after the FastAPI entry point is imple
 
 ## Current Status
 
-The frontend and backend environments are initialized. Development is focused on completing the main MVP workflow before adding advanced features.
+The frontend MVP includes the mission-control dashboard, mock hazard map,
+role-aware route recommendations, route explanations, map-layer controls, live
+source statuses, an operational change feed, and a short Three.js introduction.
+The backend environment is initialized but no backend application entry point
+has been created.
