@@ -81,6 +81,7 @@ export interface Hazard {
   detected: string
   source: string
   verification: string
+  impact: string
   affected: string[]
   coordinates: Coordinates
   polygon: Coordinates[]
@@ -232,6 +233,7 @@ export const hazards: Hazard[] = [
     detected: "18 sec ago",
     source: "Aerial imagery + weather feed",
     verification: "Awaiting operator verification",
+    impact: "Flooding may block the direct hospital approach and delay emergency vehicles using Route 460.",
     affected: ["Route 460", "Hospital access corridor"],
     coordinates: [-80.4138, 37.2202],
     polygon: [
@@ -252,6 +254,7 @@ export const hazards: Hazard[] = [
     detected: "1 min ago",
     source: "Drone inspection imagery",
     verification: "Preliminary detection",
+    impact: "Possible bridge damage may restrict heavy vehicles and interrupt the South Main supply corridor.",
     affected: ["South Main Street bridge", "Heavy vehicle corridor"],
     coordinates: [-80.4064, 37.2169],
     polygon: [

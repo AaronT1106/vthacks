@@ -1,17 +1,24 @@
-import { AlertTriangle, CheckCircle2, Clock3, RadioTower, Waves } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Clock3, Eye, RadioTower, Waves } from "lucide-react"
 import type { Hazard } from "@/src/data/mock-disaster-data"
 
 interface DamageDetailsPanelProps {
   hazard: Hazard
+  onViewEvidence?: (hazard: Hazard) => void
 }
 
-export function DamageDetailsPanel({ hazard }: DamageDetailsPanelProps) {
+export function DamageDetailsPanel({ hazard, onViewEvidence }: DamageDetailsPanelProps) {
   const isFlooding = hazard.type === "flooding"
+  const headingId = `${hazard.id}-heading`
+  const verificationTone = hazard.verification.includes("Confirmed")
+    ? "text-emerald-300"
+    : hazard.verification.includes("False positive")
+      ? "text-rose-300"
+      : "text-slate-500"
 
   return (
-    <section className="panel-section" aria-labelledby="hazard-heading">
+    <section className="panel-section" aria-labelledby={headingId}>
       <div className="section-heading-row">
-        <h2 id="hazard-heading" className="section-label">Detected hazard</h2>
+        <h2 id={headingId} className="section-label">Detected hazard</h2>
         <span className="mock-badge">Mock data</span>
       </div>
 
@@ -27,7 +34,7 @@ export function DamageDetailsPanel({ hazard }: DamageDetailsPanelProps) {
         </div>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-white">{hazard.name}</h3>
-          <p className="mt-1 text-[11px] text-slate-500">{hazard.verification}</p>
+          <p className={`mt-1 text-[11px] ${verificationTone}`}>{hazard.verification}</p>
         </div>
       </div>
 
@@ -58,6 +65,17 @@ export function DamageDetailsPanel({ hazard }: DamageDetailsPanelProps) {
           ))}
         </ul>
       </div>
+
+      {onViewEvidence && (
+        <button
+          type="button"
+          onClick={() => onViewEvidence(hazard)}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/[0.07] px-3 py-2 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-400/10"
+        >
+          <Eye className="size-3.5" aria-hidden="true" />
+          View evidence
+        </button>
+      )}
     </section>
   )
 }

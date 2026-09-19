@@ -16,6 +16,7 @@ import { DamageDetailsPanel } from "@/src/components/damage-details-panel"
 import { DisasterAreaSelection } from "@/src/components/disaster-area-selection"
 import { DestinationTypeSelector } from "@/src/components/destination-type-selector"
 import { DisasterMap } from "@/src/components/disaster-map"
+import { HazardEvidencePanel } from "@/src/components/hazard-evidence-panel"
 import { LiveDataSources } from "@/src/components/live-data-sources"
 import { MapLayerControls } from "@/src/components/map-layer-controls"
 import { PlaceSearchInput } from "@/src/components/place-search-input"
@@ -61,12 +62,16 @@ export function DisasterDashboard() {
   )
   const [destinationType, setDestinationType] = useState<DestinationType>("hospital")
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle")
-  const [selectedHazard, setSelectedHazard] = useState<Hazard>(hazards[0])
+  const [hazardRecords, setHazardRecords] = useState<Hazard[]>(hazards)
+  const [selectedHazardId, setSelectedHazardId] = useState(hazards[0].id)
+  const [evidenceHazardId, setEvidenceHazardId] = useState<string | null>(null)
   const [mapLayers, setMapLayers] = useState<MapLayerVisibility>(defaultMapLayers)
   const [changeEvents, setChangeEvents] = useState<ChangeEvent[]>(initialChangeEvents)
   const [analysisResult, setAnalysisResult] = useState<RouteAnalysisResponse | null>(null)
   const [analysisError, setAnalysisError] = useState("")
   const activeRequest = useRef<AbortController | null>(null)
+  const selectedHazard = hazardRecords.find((hazard) => hazard.id === selectedHazardId) ?? hazardRecords[0]
+  const evidenceHazard = hazardRecords.find((hazard) => hazard.id === evidenceHazardId) ?? null
 
   const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
   const displayedDestinationPlace: SelectedPlace | null = analysisResult && recommendedEndpoint
@@ -103,8 +108,32 @@ export function DisasterDashboard() {
   }, [])
 
   const handleHazardSelection = useCallback((hazard: Hazard) => {
-    setSelectedHazard(hazard)
+    setSelectedHazardId(hazard.id)
   }, [])
+
+  const closeEvidence = useCallback(() => setEvidenceHazardId(null), [])
+
+  function viewHazardEvidence(hazard: Hazard) {
+    setSelectedHazardId(hazard.id)
+    setEvidenceHazardId(hazard.id)
+  }
+
+  function updateHazardVerification(hazardId: string, verification: string) {
+    const hazard = hazardRecords.find((item) => item.id === hazardId)
+    if (!hazard) return
+
+    setHazardRecords((currentHazards) => currentHazards.map((item) =>
+      item.id === hazardId ? { ...item, verification } : item,
+    ))
+    const now = new Date()
+    setChangeEvents((currentEvents) => [{
+      id: `verification-${hazardId}-${now.getTime()}`,
+      time: now.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      title: verification,
+      detail: `${hazard.name} review updated locally (mock demo)`,
+      tone: verification.includes("Confirmed") ? "safe" : "warning",
+    }, ...currentEvents])
+  }
 
   function handleMapLayerToggle(layer: keyof MapLayerVisibility) {
     setMapLayers((currentLayers) => ({
@@ -178,7 +207,7 @@ export function DisasterDashboard() {
       }
 
       setAnalysisStatus("complete")
-      setSelectedHazard(hazards[0])
+      setSelectedHazardId(hazards[0].id)
       setChangeEvents((currentEvents) => [newEvent, ...currentEvents])
     } catch (error) {
       if (activeRequest.current !== controller) return
@@ -257,7 +286,7 @@ export function DisasterDashboard() {
                 <NavItem
                   icon={AlertOctagon}
                   label="Incidents"
-                  count={String(hazards.length)}
+                  count={String(hazardRecords.length)}
                   active={activeTab === "incidents"}
                   onSelect={() => setActiveTab("incidents")}
                 />
@@ -421,8 +450,12 @@ export function DisasterDashboard() {
                     />
                   ) : (
                     <div className="grid gap-4 lg:grid-cols-2">
-                      {hazards.map((hazard) => (
-                        <DamageDetailsPanel key={hazard.id} hazard={hazard} />
+                      {hazardRecords.map((hazard) => (
+                        <DamageDetailsPanel
+                          key={hazard.id}
+                          hazard={hazard}
+                          onViewEvidence={viewHazardEvidence}
+                        />
                       ))}
                     </div>
                   )}
@@ -436,7 +469,7 @@ export function DisasterDashboard() {
               {activeTab === "situation-map" && (
                 <>
                   <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} />
-                  <DamageDetailsPanel hazard={selectedHazard} />
+                  <DamageDetailsPanel hazard={selectedHazard} onViewEvidence={viewHazardEvidence} />
                 </>
               )}
               <WhatChangedFeed events={changeEvents} />
@@ -448,6 +481,15 @@ export function DisasterDashboard() {
           </aside>
         </div>
       </motion.main>}
+
+      {evidenceHazard && (
+        <HazardEvidencePanel
+          hazard={evidenceHazard}
+          onClose={closeEvidence}
+          onConfirm={(hazardId) => updateHazardVerification(hazardId, "Confirmed by operator (Mock demo)")}
+          onMarkFalsePositive={(hazardId) => updateHazardVerification(hazardId, "False positive marked by operator (Mock demo)")}
+        />
+      )}
     </>
   )
 }
