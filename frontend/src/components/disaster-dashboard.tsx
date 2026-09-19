@@ -25,6 +25,7 @@ import { WhatChangedFeed } from "@/src/components/what-changed-feed"
 import { analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
+  destinationLocationsByType,
   destinations,
   hazards,
   incident,
@@ -44,6 +45,22 @@ import {
 
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 
+function isValidPlace(place: SelectedPlace | null): place is SelectedPlace {
+  return Boolean(
+    place
+    && typeof place.id === "string"
+    && place.id.trim()
+    && typeof place.name === "string"
+    && place.name.trim()
+    && Number.isFinite(place.longitude)
+    && Number.isFinite(place.latitude)
+    && place.longitude >= -180
+    && place.longitude <= 180
+    && place.latitude >= -90
+    && place.latitude <= 90,
+  )
+}
+
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
@@ -51,7 +68,7 @@ export function DisasterDashboard() {
     locationOptionToSelectedPlace(startingLocations[0], "fire station"),
   )
   const [destinationPlace, setDestinationPlace] = useState<SelectedPlace | null>(() =>
-    locationOptionToSelectedPlace(destinations[0], "hospital"),
+    locationOptionToSelectedPlace(destinationLocationsByType.hospital[0], "hospital"),
   )
   const [destinationType, setDestinationType] = useState<DestinationType>("hospital")
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle")
@@ -64,14 +81,16 @@ export function DisasterDashboard() {
 
   const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
   const displayedDestinationPlace: SelectedPlace | null = analysisResult && recommendedEndpoint
-    ? {
+    && Number.isFinite(recommendedEndpoint[0]) && Number.isFinite(recommendedEndpoint[1])
+      ? {
+        id: `recommended-${analysisResult.recommendation.role}`,
         name: analysisResult.recommendation.recommendedDestination,
         longitude: recommendedEndpoint[0],
         latitude: recommendedEndpoint[1],
         category: "Role-specific mock destination",
         source: "mock",
       }
-    : destinationPlace
+    : isValidPlace(destinationPlace) ? destinationPlace : null
   const displayedDestinationType: DestinationType = analysisResult
     ? responderMode === "civilian"
       ? "shelter"
@@ -80,11 +99,19 @@ export function DisasterDashboard() {
         : "custom"
     : destinationType
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
-  const searchProximity = useMemo<Coordinates>(() => startingPlace
+  const searchProximity = useMemo<Coordinates>(() => isValidPlace(startingPlace)
     ? [startingPlace.longitude, startingPlace.latitude]
     : incident.center,
   [startingPlace])
-  const canAnalyzeRoute = Boolean(startingPlace?.presetId && destinationPlace?.presetId)
+  const canAnalyzeRoute = Boolean(
+    isValidPlace(startingPlace)
+    && isValidPlace(destinationPlace)
+    && startingPlace.presetId
+    && destinationPlace.presetId,
+  )
+  const availableMockDestinations = destinationType === "custom"
+    ? destinations
+    : destinationLocationsByType[destinationType]
 
   useEffect(() => {
     return () => {
@@ -111,18 +138,21 @@ export function DisasterDashboard() {
 
   function handleStartingPlaceChange(place: SelectedPlace | null) {
     resetAnalysis()
-    setStartingPlace(place)
+    setStartingPlace(isValidPlace(place) ? place : null)
   }
 
   function handleDestinationPlaceChange(place: SelectedPlace | null) {
     resetAnalysis()
-    setDestinationPlace(place)
+    setDestinationPlace(isValidPlace(place) ? place : null)
   }
 
   function handleDestinationTypeChange(type: DestinationType) {
     resetAnalysis()
     setDestinationType(type)
-    setDestinationPlace(null)
+    const defaultDestination = type === "custom" ? null : destinationLocationsByType[type][0]
+    setDestinationPlace(defaultDestination
+      ? locationOptionToSelectedPlace(defaultDestination, type.replaceAll("-", " "))
+      : null)
   }
 
   function resetAnalysis() {
@@ -226,6 +256,11 @@ export function DisasterDashboard() {
                 </div>
 
                 <div className="mt-4 space-y-4">
+                  <DestinationTypeSelector
+                    value={destinationType}
+                    onChange={handleDestinationTypeChange}
+                  />
+
                   {mapboxToken ? (
                     <>
                       <PlaceSearchInput
@@ -238,13 +273,8 @@ export function DisasterDashboard() {
                         onChange={handleStartingPlaceChange}
                       />
 
-                      <DestinationTypeSelector
-                        value={destinationType}
-                        onChange={handleDestinationTypeChange}
-                      />
-
                       <PlaceSearchInput
-                        key={destinationType}
+                        key={`${destinationType}:${destinationPlace?.id ?? "empty"}`}
                         id="destination"
                         label="Destination"
                         placeholder={destinationType === "custom"
@@ -280,13 +310,20 @@ export function DisasterDashboard() {
                         <select
                           id="destination"
                           className="field-control"
-                          value={destinationPlace?.presetId ?? ""}
+                          value={destinationPlace?.id ?? ""}
                           onChange={(event) => {
-                            const location = destinations.find((item) => item.id === event.target.value)
-                            if (location) handleDestinationPlaceChange(locationOptionToSelectedPlace(location, "destination"))
+                            const location = availableMockDestinations.find((item) => item.id === event.target.value)
+                            if (location) {
+                              handleDestinationPlaceChange(locationOptionToSelectedPlace(
+                                location,
+                                destinationType.replaceAll("-", " "),
+                              ))
+                            }
                           }}
                         >
-                          {destinations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                          {availableMockDestinations.map((location) => (
+                            <option key={location.id} value={location.id}>{location.name}</option>
+                          ))}
                         </select>
                       </div>
                       <p className="rounded-lg border border-amber-400/15 bg-amber-400/[0.06] px-2.5 py-2 text-[10px] leading-4 text-amber-200/80">

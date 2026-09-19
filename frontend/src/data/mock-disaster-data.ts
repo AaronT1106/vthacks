@@ -22,6 +22,7 @@ export type DestinationType =
   | "custom"
 
 export interface SelectedPlace {
+  id: string
   name: string
   address?: string
   longitude: number
@@ -49,6 +50,7 @@ export interface LocationOption {
   name: string
   kind: "start" | "destination" | "hospital" | "shelter"
   coordinates: Coordinates
+  routeAnalysisId?: string
 }
 
 export function locationOptionToSelectedPlace(
@@ -56,12 +58,13 @@ export function locationOptionToSelectedPlace(
   category?: string,
 ): SelectedPlace {
   return {
+    id: location.id,
     name: location.name,
     longitude: location.coordinates[0],
     latitude: location.coordinates[1],
     category,
     source: "mock",
-    presetId: location.id,
+    presetId: location.routeAnalysisId,
   }
 }
 
@@ -174,12 +177,14 @@ export const startingLocations: LocationOption[] = [
     name: "Blacksburg Fire Station",
     kind: "start",
     coordinates: [-80.4202, 37.2306],
+    routeAnalysisId: "blacksburg-fire-station",
   },
   {
     id: "virginia-tech-rescue",
     name: "Virginia Tech Rescue Squad",
     kind: "start",
     coordinates: [-80.4247, 37.2246],
+    routeAnalysisId: "virginia-tech-rescue",
   },
 ]
 
@@ -189,14 +194,43 @@ export const destinations: LocationOption[] = [
     name: "LewisGale Hospital Montgomery",
     kind: "destination",
     coordinates: [-80.4093, 37.2107],
+    routeAnalysisId: "lewisgale-hospital",
   },
   {
     id: "blacksburg-shelter",
     name: "Blacksburg Community Shelter",
     kind: "destination",
     coordinates: [-80.4015, 37.2226],
+    routeAnalysisId: "blacksburg-shelter",
   },
 ]
+
+export const destinationLocationsByType: Record<
+  Exclude<DestinationType, "custom">,
+  LocationOption[]
+> = {
+  hospital: [destinations[0]],
+  shelter: [destinations[1]],
+  "emergency-room": [{
+    id: "lewisgale-emergency-room",
+    name: "LewisGale Emergency Room (Mock)",
+    kind: "hospital",
+    coordinates: [-80.4095, 37.2109],
+    routeAnalysisId: "lewisgale-hospital",
+  }],
+  "police-station": [{
+    id: "blacksburg-police-station",
+    name: "Blacksburg Police Station (Mock)",
+    kind: "destination",
+    coordinates: [-80.4124, 37.2291],
+  }],
+  "fire-station": [{
+    id: "blacksburg-fire-station-destination",
+    name: "Blacksburg Fire Station (Mock)",
+    kind: "destination",
+    coordinates: [-80.4202, 37.2306],
+  }],
+}
 
 export const hospitals: LocationOption[] = [destinations[0]]
 

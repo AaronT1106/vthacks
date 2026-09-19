@@ -80,9 +80,10 @@ function getAddress(item: {
 function featureToSelectedPlace(feature: SearchBoxFeature): SelectedPlace | null {
   const coordinates = feature.geometry?.coordinates
   const properties = feature.properties
-  if (!properties?.name || !coordinates || coordinates.length < 2) return null
+  if (!properties?.mapbox_id || !properties.name || !coordinates || coordinates.length < 2) return null
 
   return {
+    id: properties.mapbox_id,
     name: properties.name,
     address: getAddress(properties),
     longitude: coordinates[0],

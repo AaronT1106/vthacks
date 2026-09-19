@@ -11,7 +11,12 @@ import {
   Waves,
 } from "lucide-react"
 import type { FeatureCollection, LineString, Point, Polygon } from "geojson"
-import type { GeoJSONSource, Map as MapboxMap } from "mapbox-gl"
+import type {
+  GeoJSONSource,
+  Map as MapboxMap,
+  MapboxErrorEvent,
+  MapMouseEvent,
+} from "mapbox-gl"
 import {
   hazards,
   hospitals,
@@ -92,7 +97,8 @@ function selectedPlaceCollection(
   role: "Starting Point" | "Destination",
   destinationType?: DestinationType,
 ): FeatureCollection<Point> {
-  if (!place) return { type: "FeatureCollection", features: [] }
+  const coordinates = placeCoordinates(place)
+  if (!place || !coordinates) return { type: "FeatureCollection", features: [] }
   return {
     type: "FeatureCollection",
     features: [{
@@ -105,7 +111,7 @@ function selectedPlaceCollection(
           ? place.category ?? "Starting point"
           : destinationType?.replaceAll("-", " ") ?? place.category ?? "Destination",
       },
-      geometry: { type: "Point", coordinates: [place.longitude, place.latitude] },
+      geometry: { type: "Point", coordinates },
     }],
   }
 }
@@ -145,19 +151,40 @@ function createPlacePopupContent(properties: Record<string, unknown>) {
 }
 
 function placeCoordinates(place: SelectedPlace | null): Coordinates | null {
-  return place ? [place.longitude, place.latitude] : null
+  if (
+    !place
+    || typeof place.id !== "string"
+    || !place.id.trim()
+    || typeof place.name !== "string"
+    || !place.name.trim()
+    || !Number.isFinite(place.longitude)
+    || !Number.isFinite(place.latitude)
+    || place.longitude < -180
+    || place.longitude > 180
+    || place.latitude < -90
+    || place.latitude > 90
+  ) return null
+  return [place.longitude, place.latitude]
 }
 
 function routeCollection(coordinates: Array<[number, number]>): FeatureCollection<LineString> {
+  const validCoordinates = coordinates.filter(([longitude, latitude]) =>
+    Number.isFinite(longitude)
+    && Number.isFinite(latitude)
+    && longitude >= -180
+    && longitude <= 180
+    && latitude >= -90
+    && latitude <= 90,
+  )
   return {
     type: "FeatureCollection",
-    features: [
+    features: validCoordinates.length >= 2 ? [
       {
         type: "Feature",
         properties: {},
-        geometry: { type: "LineString", coordinates },
+        geometry: { type: "LineString", coordinates: validCoordinates },
       },
-    ],
+    ] : [],
   }
 }
 
@@ -400,17 +427,38 @@ function muteBasemapLabels(map: MapboxMap) {
   }
 }
 
-function isAuthenticationError(error: Error) {
-  const errorWithStatus = error as Error & { status?: number }
-  const message = error.message.toLowerCase()
+function isAuthenticationError(error: { message?: string; status?: number }) {
+  const message = error.message?.toLowerCase() ?? ""
   return (
-    errorWithStatus.status === 401 ||
-    errorWithStatus.status === 403 ||
+    error.status === 401 ||
+    error.status === 403 ||
     message.includes("access token") ||
     message.includes("unauthorized") ||
     message.includes("not authorized") ||
     message.includes("invalid token")
   )
+}
+
+function queryMapFeaturesSafely(
+  map: MapboxMap,
+  eventPoint: MapMouseEvent["point"] | undefined,
+  layerIds: string[],
+) {
+  if (
+    !eventPoint
+    || !Number.isFinite(eventPoint.x)
+    || !Number.isFinite(eventPoint.y)
+    || layerIds.length === 0
+  ) return []
+
+  try {
+    if (!map.loaded() || !map.isStyleLoaded()) return []
+    const availableLayers = layerIds.filter((layerId) => Boolean(map.getLayer(layerId)))
+    if (availableLayers.length === 0) return []
+    return map.queryRenderedFeatures(eventPoint, { layers: availableLayers })
+  } catch {
+    return []
+  }
 }
 
 export function DisasterMap({
@@ -469,6 +517,11 @@ export function DisasterMap({
 
     let disposed = false
     let initializedMap: MapboxMap | null = null
+    let resizeFrame: number | null = null
+    let handleMapError: ((event: MapboxErrorEvent) => void) | null = null
+    let handleStyleLoad: (() => void) | null = null
+    let handleMapClick: ((event: MapMouseEvent) => void) | null = null
+    let handleMapMouseMove: ((event: MapMouseEvent) => void) | null = null
 
     async function initializeMap() {
       try {
@@ -493,14 +546,15 @@ export function DisasterMap({
         )
         initializedMap.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right")
 
-        initializedMap.on("error", (event) => {
+        handleMapError = (event) => {
+          if (disposed || map.current !== initializedMap) return
           if (!isAuthenticationError(event.error)) return
           setMapReady(false)
           setMapFailed(true)
-        })
+        }
 
-        initializedMap.on("style.load", () => {
-          if (!initializedMap || disposed) return
+        handleStyleLoad = () => {
+          if (!initializedMap || disposed || map.current !== initializedMap) return
 
           if (currentStyle.current === "dark") muteBasemapLabels(initializedMap)
           addMockSourcesAndLayers(initializedMap, currentMapState.current)
@@ -512,17 +566,21 @@ export function DisasterMap({
           }
 
           setMapReady(true)
-          window.requestAnimationFrame(() => initializedMap?.resize())
-        })
+          resizeFrame = window.requestAnimationFrame(() => {
+            if (!disposed && initializedMap && map.current === initializedMap) {
+              initializedMap.resize()
+            }
+          })
+        }
 
-        initializedMap.on("click", (event) => {
-          if (!initializedMap) return
-          const placeLayers = ["starting-place-point", "destination-place-point"].filter((layerId) =>
-            initializedMap?.getLayer(layerId),
-          )
-          const selectedPlaceFeature = placeLayers.length > 0
-            ? initializedMap.queryRenderedFeatures(event.point, { layers: placeLayers })[0]
-            : undefined
+        handleMapClick = (event) => {
+          if (disposed || !initializedMap || map.current !== initializedMap) return
+          const selectedPlaceFeature = queryMapFeaturesSafely(
+            initializedMap,
+            event.point,
+            ["starting-place-point", "destination-place-point"],
+          )[0]
+          if (disposed || map.current !== initializedMap) return
           if (selectedPlaceFeature?.properties) {
             new mapboxgl.Popup({ closeButton: false, offset: 12, className: "disaster-map-popup" })
               .setLngLat(event.lngLat)
@@ -531,34 +589,41 @@ export function DisasterMap({
             return
           }
 
-          const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
-            initializedMap?.getLayer(layerId),
-          )
-          if (clickableLayers.length === 0) return
-
-          const clickedFeature = initializedMap.queryRenderedFeatures(event.point, {
-            layers: clickableLayers,
-          })[0]
+          const clickedFeature = queryMapFeaturesSafely(
+            initializedMap,
+            event.point,
+            ["flooding-fill", "bridge-damage-fill"],
+          )[0]
+          if (disposed || map.current !== initializedMap) return
           const hazardId = clickedFeature?.properties?.hazardId
           const selectedHazard = hazards.find((hazard) => hazard.id === hazardId)
           if (selectedHazard) hazardSelectionHandler.current(selectedHazard)
-        })
+        }
 
-        initializedMap.on("mousemove", (event) => {
-          if (!initializedMap) return
-          const clickableLayers = [
-            "starting-place-point",
-            "destination-place-point",
-            "flooding-fill",
-            "bridge-damage-fill",
-          ].filter((layerId) =>
-            initializedMap?.getLayer(layerId),
+        handleMapMouseMove = (event) => {
+          if (disposed || !initializedMap || map.current !== initializedMap) return
+          const interactiveFeatures = queryMapFeaturesSafely(
+            initializedMap,
+            event.point,
+            [
+              "starting-place-point",
+              "destination-place-point",
+              "flooding-fill",
+              "bridge-damage-fill",
+            ],
           )
-          const hasInteractiveFeature =
-            clickableLayers.length > 0 &&
-            initializedMap.queryRenderedFeatures(event.point, { layers: clickableLayers }).length > 0
-          initializedMap.getCanvas().style.cursor = hasInteractiveFeature ? "pointer" : ""
-        })
+          if (disposed || map.current !== initializedMap) return
+          try {
+            initializedMap.getCanvas().style.cursor = interactiveFeatures.length > 0 ? "pointer" : ""
+          } catch {
+            // The canvas can disappear between an interaction event and map cleanup.
+          }
+        }
+
+        initializedMap.on("error", handleMapError)
+        initializedMap.on("style.load", handleStyleLoad)
+        initializedMap.on("click", handleMapClick)
+        initializedMap.on("mousemove", handleMapMouseMove)
       } catch {
         if (!disposed) setMapFailed(true)
       }
@@ -568,8 +633,15 @@ export function DisasterMap({
 
     return () => {
       disposed = true
-      initializedMap?.remove()
-      if (map.current === initializedMap) map.current = null
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+      if (initializedMap) {
+        if (handleMapError) initializedMap.off("error", handleMapError)
+        if (handleStyleLoad) initializedMap.off("style.load", handleStyleLoad)
+        if (handleMapClick) initializedMap.off("click", handleMapClick)
+        if (handleMapMouseMove) initializedMap.off("mousemove", handleMapMouseMove)
+        if (map.current === initializedMap) map.current = null
+        initializedMap.remove()
+      }
     }
   }, [mapFailed, mapboxToken])
 
@@ -588,27 +660,28 @@ export function DisasterMap({
   ])
 
   useEffect(() => {
-    if (!map.current || !mapReady || !startingPlace) return
+    if (!map.current || !mapReady) return
+    const startCoordinates = placeCoordinates(startingPlace)
+    if (!startCoordinates) return
+    const destinationCoordinates = placeCoordinates(destinationPlace)
     const selectionKey = [
-      startingPlace.longitude,
-      startingPlace.latitude,
-      destinationPlace?.longitude ?? "",
-      destinationPlace?.latitude ?? "",
+      ...startCoordinates,
+      ...(destinationCoordinates ?? ["", ""]),
     ].join(":")
     if (selectionKey === lastFramedPlaces.current) return
     lastFramedPlaces.current = selectionKey
 
-    if (destinationPlace) {
+    if (destinationCoordinates) {
       map.current.fitBounds(
         [
-          [startingPlace.longitude, startingPlace.latitude],
-          [destinationPlace.longitude, destinationPlace.latitude],
+          startCoordinates,
+          destinationCoordinates,
         ],
         { padding: 80, maxZoom: 14, duration: 700 },
       )
     } else {
       map.current.easeTo({
-        center: [startingPlace.longitude, startingPlace.latitude],
+        center: startCoordinates,
         zoom: 13.5,
         duration: 650,
       })
@@ -734,12 +807,10 @@ function FallbackMap({
   destinationType,
 }: DisasterMapProps) {
   const routePoints = recommendedRoute?.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
-  const startPoint = startingPlace
-    ? projectDemoPoint([startingPlace.longitude, startingPlace.latitude])
-    : null
-  const endPoint = destinationPlace
-    ? projectDemoPoint([destinationPlace.longitude, destinationPlace.latitude])
-    : null
+  const validStartingCoordinates = placeCoordinates(startingPlace)
+  const validDestinationCoordinates = placeCoordinates(destinationPlace)
+  const startPoint = validStartingCoordinates ? projectDemoPoint(validStartingCoordinates) : null
+  const endPoint = validDestinationCoordinates ? projectDemoPoint(validDestinationCoordinates) : null
 
   return (
     <div className={`absolute inset-0 ${layers.satellite ? "fallback-map-satellite" : "fallback-map"}`}>
@@ -818,7 +889,7 @@ function FallbackMap({
         )}
       </svg>
 
-      {startingPlace && startPoint && (
+      {startingPlace?.id && startPoint && (
         <MapMarker
           point={startPoint}
           label={startingPlace.name}
@@ -826,7 +897,7 @@ function FallbackMap({
           tone="bg-cyan-400 text-slate-950"
         />
       )}
-      {destinationPlace && endPoint && (
+      {destinationPlace?.id && endPoint && (
         <MapMarker
           point={endPoint}
           label={destinationPlace.name}

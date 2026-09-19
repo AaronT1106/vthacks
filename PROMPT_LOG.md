@@ -366,3 +366,105 @@ Make route analysis meaningfully different for civilians, ambulances, firefighte
 - `npm run lint`: passed.
 - `npm run build`: passed, including TypeScript and static generation. The sandboxed build compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved outside-sandbox retry passed.
 - `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
+## Mapbox Interaction Lifecycle Fix — 2026-09-19
+
+### Request
+
+Fix the Mapbox `Cannot set properties of undefined (setting 'width')` error that occurred when hovering or clicking the map after changing destination type or destination.
+
+### Cause
+
+- Map click and mousemove listeners could call `queryRenderedFeatures` while a style was loading, queried layers were being replaced, or the map was being disposed.
+- The listeners only checked whether the local map variable existed. They did not verify map/style readiness or event-point validity, did not catch Mapbox query failures, and were anonymous so cleanup could not explicitly detach them before `remove()`.
+
+### Files Changed
+
+- `frontend/src/components/disaster-map.tsx`: added guarded feature queries, current-map and disposal checks, named event handlers, listener cleanup, and cancellation of the deferred resize.
+- `PROMPT_LOG.md`: documented the fix and validation.
+
+### Decisions
+
+- Feature queries now require a loaded map, loaded style, finite event point, and at least one currently existing layer.
+- Missing place or hazard layers return an empty result. Mapbox query and canvas-access errors are contained so pointer interaction cannot crash the dashboard.
+- Click, mousemove, style-load, and error listeners are detached before map removal. Deferred resize work also verifies the live map instance.
+- Existing Mapbox rendering, fallback rendering, place search, hazard selection, destination state, and route analysis were preserved.
+- No dependencies, environment files, backend files, or unrelated components were changed.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation.
+- The development log confirmed the original failure originated in the unguarded click query. Browser automation was unavailable for replaying every hover/click sequence; the guarded query covers all five destination transitions through the shared handler.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
+## Complete Destination-Type Data Fix — 2026-09-19
+
+### Request
+
+Fix runtime errors for fire-station and police-station destinations and for changing selected destinations, while supporting every typed destination in the live Mapbox and mock-map flows.
+
+### Cause
+
+- Only hospitals and shelters were represented in the central destination data. Fire-station and police-station defaults were assembled inside the dashboard without the same stable identifier and backend-preset fields.
+- Changing a destination reset the completed route. The map serialized the missing route as a zero-coordinate GeoJSON `LineString`, which Mapbox rejects.
+- Search UI state was tied only to destination type, so a parent-selected replacement could retain stale state when the selected destination changed within that type.
+
+### Files Changed
+
+- `frontend/src/data/mock-disaster-data.ts`: added stable selected-place IDs, explicit backend preset IDs, and complete mock destinations for hospital, shelter, emergency room, police station, and fire station.
+- `frontend/src/lib/mapbox-place-search.ts`: carries the Mapbox place ID into the shared selected-place contract and rejects incomplete retrieved features.
+- `frontend/src/components/disaster-dashboard.tsx`: selects the first valid destination for each type, validates all place transitions, resets analysis, refreshes search state by selection ID, and exposes typed destinations in the fallback UI.
+- `frontend/src/components/disaster-map.tsx`: filters invalid point coordinates, safely frames selections, protects the fallback renderer, and emits no line feature when a route has fewer than two valid coordinates.
+- `PROMPT_LOG.md`: documented the fix and validation.
+
+### Decisions
+
+- Kept backend-supported preset IDs separate from display IDs so every map destination is valid without sending unsupported destination values to FastAPI.
+- Emergency-room analysis reuses the existing LewisGale hospital backend preset. Police and fire destinations remain clearly labeled mock map selections until the backend contract supports those destination IDs.
+- Changing type replaces incompatible destination data immediately. Changing a place remounts the destination search control by destination ID, clearing its old requests and result state.
+- No dependencies, backend code, Mapbox configuration, or environment files were changed.
+
+### Validation
+
+- A temporary local data check validated all five required destination types and forward/reverse transitions for nonempty ID, name, and two finite coordinates; the temporary file was removed afterward.
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation. The sandboxed build compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved retry passed.
+- Browser automation was unavailable, so no automated live Mapbox interaction was run.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
+## Destination-Type Runtime Fix — 2026-09-19
+
+### Request
+
+Fix the client-side error triggered by changing Destination Type while preserving live Mapbox search, the mock fallback, role-specific route analysis, and the existing dashboard design.
+
+### Cause
+
+- The destination-type handler cleared the destination and reset the completed analysis in the same state transition.
+- Resetting the analysis removed the recommended route, and the map serialized the missing route as a GeoJSON `LineString` with zero coordinates. Mapbox requires at least two coordinates and threw the runtime error that produced the Next.js Reload overlay.
+
+### Files Changed
+
+- `frontend/src/components/disaster-dashboard.tsx`: selects a compatible mock destination when a typed destination changes, clears custom destinations, validates selected place names and coordinates, and resets route analysis safely.
+- `frontend/src/components/disaster-map.tsx`: rejects invalid place coordinates, avoids rendering invalid point data, and represents a missing route as an empty feature collection instead of an invalid line.
+- `PROMPT_LOG.md`: documented the fix and validation.
+
+### Decisions
+
+- Hospital, shelter, fire-station, police-station, and emergency-room changes receive deterministic compatible mock selections. Custom destination changes clear the old typed selection so the user can search for a new place.
+- Only existing backend-supported preset destinations enable route analysis. Other mock or searched map destinations remain visible without sending an unsupported request.
+- Map framing and GeoJSON updates now ignore incomplete or out-of-range coordinates.
+- No dependencies, backend files, Mapbox configuration, or environment files were changed.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation. The sandboxed build compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved retry passed.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
