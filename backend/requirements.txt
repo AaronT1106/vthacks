@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+opencv-python
+numpy
+pillow
+networkx
+osmnx
+supabase

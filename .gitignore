@@ -1,0 +1,16 @@
+# Frontend
+frontend/node_modules/
+frontend/.next/
+
+# Backend
+backend/.venv/
+backend/__pycache__/
+
+# Environment files / secrets
+.env
+.env.local
+frontend/.env.local
+backend/.env
+
+# macOS
+.DS_Store
