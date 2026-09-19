@@ -1,4 +1,4 @@
-# Pathfinder AI
+# DisasterLens 
 
 Pathfinder AI is an AI-powered disaster-response platform that detects infrastructure damage, determines its operational impact, and recommends safer actions for civilians and emergency responders.
 
@@ -48,6 +48,26 @@ Mock and simulated information will be clearly labeled.
 
 ## Core Features
 
+LIVE DATA SOURCES
+│
+├── Drone / aerial imagery
+├── Satellite imagery
+├── Weather / flood feeds
+├── Fire detection feeds
+├── Road closures
+└── Emergency reports
+        ↓
+     DisasterLens
+        ↓
+Detect new hazard
+        ↓
+Determine affected roads/infrastructure
+        ↓
+Update risk map
+        ↓
+Recalculate safest route
+        ↓
+Push change to users instantly
 ### Damage Detection
 
 Analyze imagery to detect:
