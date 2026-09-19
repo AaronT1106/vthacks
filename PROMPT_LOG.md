@@ -607,3 +607,40 @@ Make the Situation Map, Routes, and Incidents sidebar items functional while pre
 - `npm run lint`: passed.
 - `npm run build`: passed, including TypeScript and static generation.
 - `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
+## Hazard Evidence and Human Verification — 2026-09-19
+
+### Request
+
+Add a mock hazard-evidence review workflow with before/after placeholders and local human verification actions while preserving map and route-analysis behavior.
+
+### Files Changed
+
+- `frontend/src/components/hazard-evidence-panel.tsx`
+- `frontend/src/components/damage-details-panel.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Added a View Evidence action to selected-hazard and incident cards.
+- Added an accessible evidence modal containing hazard type, severity, confidence, source, detection time, affected infrastructure, verification status, and a concise impact explanation.
+- Added clearly labeled mock before-image and after-image placeholders without external assets.
+- Added Confirm Hazard and Mark False Positive actions that update local hazard state visibly in the modal, hazard cards, Incidents view, and operational feed.
+- Preserved route-analysis and navigation state while reviewing evidence.
+
+### Decisions
+
+- Kept verification local and labeled as mock/demo activity; no backend persistence or operational claim was added.
+- Reused the existing panel, badge, color, and typography styles.
+- Added concise impact statements to the existing mock hazard records so explanations remain deterministic and evidence-based.
+- Did not modify `disaster-map.tsx`, Mapbox configuration, disaster-area selection, route-analysis code, dependencies, backend files, or environment files.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
