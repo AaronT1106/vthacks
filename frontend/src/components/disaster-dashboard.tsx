@@ -13,7 +13,9 @@ import {
   Route as RouteIcon,
 } from "lucide-react"
 import { DamageDetailsPanel } from "@/src/components/damage-details-panel"
+import { DisasterAnalysisStep } from "@/src/components/disaster-analysis-step"
 import { DisasterAreaSelection } from "@/src/components/disaster-area-selection"
+import { DisasterImageryStep, type DisasterImagery } from "@/src/components/disaster-imagery-step"
 import { DestinationTypeSelector } from "@/src/components/destination-type-selector"
 import { DisasterMap } from "@/src/components/disaster-map"
 import { HazardEvidencePanel } from "@/src/components/hazard-evidence-panel"
@@ -24,6 +26,7 @@ import { ResponderModeSelector } from "@/src/components/responder-mode-selector"
 import { RouteRecommendationPanel } from "@/src/components/route-recommendation-panel"
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
 import { WhatChangedFeed } from "@/src/components/what-changed-feed"
+import type { WorkflowStep } from "@/src/components/workflow-progress"
 import { analyzeCoordinateRoute, analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
@@ -48,6 +51,20 @@ import {
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 type DashboardTab = "situation-map" | "routes" | "incidents"
 
+interface PendingAreaChange {
+  bounds: DisasterAreaBounds
+  place: SelectedPlace | null
+}
+
+const BOUNDS_CHANGE_TOLERANCE = 0.000001
+
+function boundsMateriallyChanged(current: DisasterAreaBounds, next: DisasterAreaBounds) {
+  return Math.abs(current.west - next.west) > BOUNDS_CHANGE_TOLERANCE
+    || Math.abs(current.south - next.south) > BOUNDS_CHANGE_TOLERANCE
+    || Math.abs(current.east - next.east) > BOUNDS_CHANGE_TOLERANCE
+    || Math.abs(current.north - next.north) > BOUNDS_CHANGE_TOLERANCE
+}
+
 function formatFeedTime(date: Date) {
   return date.toLocaleTimeString([], {
     hour12: false,
@@ -59,9 +76,15 @@ function formatFeedTime(date: Date) {
 
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
+  const [workflowStep, setWorkflowStep] = useState<WorkflowStep>("area")
   const [activeTab, setActiveTab] = useState<DashboardTab>("situation-map")
   const [disasterAreaBounds, setDisasterAreaBounds] = useState<DisasterAreaBounds | null>(null)
-  const [areaConfirmed, setAreaConfirmed] = useState(false)
+  const [disasterAreaPlace, setDisasterAreaPlace] = useState<SelectedPlace | null>(null)
+  const [disasterImagery, setDisasterImagery] = useState<DisasterImagery>({
+    beforeImage: null,
+    afterImage: null,
+  })
+  const [pendingAreaChange, setPendingAreaChange] = useState<PendingAreaChange | null>(null)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
   const [startingPlace, setStartingPlace] = useState<SelectedPlace | null>(() =>
     locationOptionToSelectedPlace(startingLocations[0], "fire station"),
@@ -185,6 +208,23 @@ export function DisasterDashboard() {
     setAnalysisStatus("idle")
   }
 
+  function commitArea(bounds: DisasterAreaBounds, place: SelectedPlace | null) {
+    setDisasterAreaBounds(bounds)
+    setDisasterAreaPlace(place)
+    setWorkflowStep("imagery")
+  }
+
+  function handleAreaConfirmation(bounds: DisasterAreaBounds, place: SelectedPlace | null) {
+    if (!(bounds.east > bounds.west && bounds.north > bounds.south)) return
+    const changed = disasterAreaBounds ? boundsMateriallyChanged(disasterAreaBounds, bounds) : false
+    const hasImagery = Boolean(disasterImagery.beforeImage || disasterImagery.afterImage)
+    if (changed && hasImagery) {
+      setPendingAreaChange({ bounds, place })
+      return
+    }
+    commitArea(bounds, place)
+  }
+
   async function handleAnalyzeRoute() {
     if (activeRequest.current || !startingPlace || !destinationPlace) return
     const controller = new AbortController()
@@ -247,17 +287,42 @@ export function DisasterDashboard() {
     <>
       <AnimatePresence>{showIntro && <ThreeDimensionalGlobe onComplete={() => setShowIntro(false)} />}</AnimatePresence>
 
-      {!showIntro && !areaConfirmed && (
+      {!showIntro && workflowStep === "area" && (
         <DisasterAreaSelection
+          confirmedBounds={disasterAreaBounds}
+          confirmedPlace={disasterAreaPlace}
+          onConfirm={handleAreaConfirmation}
+        />
+      )}
+
+      {!showIntro && workflowStep === "imagery" && disasterAreaBounds && (
+        <DisasterImageryStep
           bounds={disasterAreaBounds}
-          onBoundsChange={setDisasterAreaBounds}
-          onConfirm={() => {
-            if (disasterAreaBounds) setAreaConfirmed(true)
+          place={disasterAreaPlace}
+          imagery={disasterImagery}
+          onImageryChange={setDisasterImagery}
+          onBack={() => setWorkflowStep("area")}
+          onContinue={() => {
+            if (
+              disasterAreaBounds.east > disasterAreaBounds.west
+              && disasterAreaBounds.north > disasterAreaBounds.south
+              && disasterImagery.beforeImage
+              && disasterImagery.afterImage
+            ) setWorkflowStep("analysis")
           }}
         />
       )}
 
-      {areaConfirmed && <motion.main
+      {!showIntro && workflowStep === "analysis" && disasterAreaBounds && (
+        <DisasterAnalysisStep
+          bounds={disasterAreaBounds}
+          place={disasterAreaPlace}
+          imagery={disasterImagery}
+          onBack={() => setWorkflowStep("imagery")}
+        />
+      )}
+
+      {!showIntro && workflowStep === "route" && <motion.main
         className="flex min-h-screen flex-col overflow-hidden bg-[#05080e] text-slate-100"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -509,6 +574,38 @@ export function DisasterDashboard() {
           onConfirm={(hazardId) => updateHazardVerification(hazardId, "Confirmed by operator (Mock demo)")}
           onMarkFalsePositive={(hazardId) => updateHazardVerification(hazardId, "False positive marked by operator (Mock demo)")}
         />
+      )}
+
+      {pendingAreaChange && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4" role="presentation">
+          <section
+            className="w-full max-w-md rounded-xl border border-slate-700 bg-[#0c111b] p-5 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="change-area-title"
+            aria-describedby="change-area-description"
+          >
+            <h2 id="change-area-title" className="text-lg font-semibold text-white">Change analysis area?</h2>
+            <p id="change-area-description" className="mt-2 text-sm leading-6 text-slate-400">
+              The selected imagery is associated with the current area. Changing the area will remove the Before and After images.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button type="button" className="area-secondary-button" onClick={() => setPendingAreaChange(null)}>Cancel</button>
+              <button
+                type="button"
+                className="area-primary-button"
+                onClick={() => {
+                  const nextArea = pendingAreaChange
+                  setPendingAreaChange(null)
+                  setDisasterImagery({ beforeImage: null, afterImage: null })
+                  commitArea(nextArea.bounds, nextArea.place)
+                }}
+              >
+                Change area
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </>
   )

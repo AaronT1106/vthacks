@@ -743,3 +743,45 @@ Upgrade only the initial disaster-area map from a tilted basemap to a real Mapbo
 - The existing development server compiled the changes and returned HTTP 200.
 - Browser visual checks for terrain relief, building coverage, camera interaction, and pointer drawing remain pending because no connected browser was available.
 - No backend, dependency manifest, environment value, shared type, intro, dashboard, or unrelated UI files were changed.
+
+---
+
+## DisasterLens Imagery Intake and Draft Areas — 2026-09-19
+
+### Request
+
+Insert a frontend-only Imagery step after confirmed area selection, retain decoded Before and After files in session state, add a minimal Analysis placeholder, and prevent existing imagery from being silently associated with changed geographic bounds.
+
+### Files Created
+
+- `frontend/src/components/workflow-progress.tsx`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `frontend/src/components/disaster-analysis-step.tsx`
+
+### Files Modified
+
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-area-selection.tsx`
+- `frontend/src/components/disaster-area-selection-map.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Replaced the area-confirmed boolean with an Area, Imagery, Analysis, and future Route workflow step stored in the existing top-level dashboard.
+- Kept confirmed incident bounds and place in dashboard state while area editing uses temporary draft bounds and place state.
+- Displayed saved bounds with a restrained dashed amber overlay and draft bounds with the existing solid cyan overlay in both Mapbox and fallback modes.
+- Added a guarded area-change dialog. Materially changed bounds clear both associated images only after the user selects Change area; Cancel preserves saved bounds, imagery, and the draft.
+- Added responsive Before and After upload panels with accessible file inputs, native drag-and-drop, PNG/JPEG/WEBP validation, empty-MIME extension handling, decoding validation, previews, replacement, removal, and same-file reselection.
+- Files enter top-level imagery state only after browser decoding succeeds. Temporary decoding URLs and displayed preview URLs are revoked on success, failure, replacement, removal, navigation, and unmount.
+- Added a minimal Analysis readiness screen with a disabled Analyze damage action and Back to imagery navigation.
+- Preserved the existing operations dashboard behind the future Route step without changing its responder or route-analysis behavior.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: attempted as defined by `package.json`, but Turbopack's CSS worker was blocked from binding its internal port with `Operation not permitted`, including the approved retry outside the sandbox.
+- `npm run dev`: started successfully; the home page compiled and returned HTTP 200.
+- Browser-only upload, drag/drop, preview, modal, Mapbox pointer, and responsive checks remain pending because no connected browser was available.
+- `git diff --check`: passed before this log entry.
+- No backend, dependency manifest, environment, storage, satellite, AI, or route-analysis files were changed.

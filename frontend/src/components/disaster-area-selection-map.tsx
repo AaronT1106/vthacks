@@ -12,10 +12,11 @@ import {
 } from "@/src/data/mock-disaster-data"
 
 interface DisasterAreaSelectionMapProps {
-  bounds: DisasterAreaBounds | null
+  confirmedBounds: DisasterAreaBounds | null
+  draftBounds: DisasterAreaBounds | null
   focusPlace: SelectedPlace | null
   selectionEnabled: boolean
-  onBoundsChange: (bounds: DisasterAreaBounds | null) => void
+  onDraftBoundsChange: (bounds: DisasterAreaBounds | null) => void
   onSelectionComplete: () => void
 }
 
@@ -50,7 +51,7 @@ function boundsFromCorners(first: Coordinates, second: Coordinates): DisasterAre
 }
 
 function isValidBounds(bounds: DisasterAreaBounds) {
-  return bounds.east - bounds.west > 0.000001 && bounds.north - bounds.south > 0.000001
+  return bounds.east > bounds.west && bounds.north > bounds.south
 }
 
 function boundsCollection(bounds: DisasterAreaBounds | null): FeatureCollection<Polygon> {
@@ -98,19 +99,43 @@ function createLocationPopup(place: SelectedPlace) {
   return container
 }
 
-function addSelectionLayer(map: MapboxMap, bounds: DisasterAreaBounds | null) {
-  if (!map.getSource("selected-disaster-area")) {
-    map.addSource("selected-disaster-area", { type: "geojson", data: boundsCollection(bounds) })
+function addSelectionLayers(
+  map: MapboxMap,
+  confirmedBounds: DisasterAreaBounds | null,
+  draftBounds: DisasterAreaBounds | null,
+) {
+  if (!map.getSource("confirmed-disaster-area")) {
+    map.addSource("confirmed-disaster-area", { type: "geojson", data: boundsCollection(confirmedBounds) })
     map.addLayer({
-      id: "selected-disaster-area-fill",
+      id: "confirmed-disaster-area-fill",
       type: "fill",
-      source: "selected-disaster-area",
+      source: "confirmed-disaster-area",
+      paint: { "fill-color": "#f59e0b", "fill-opacity": 0.07 },
+    })
+    map.addLayer({
+      id: "confirmed-disaster-area-outline",
+      type: "line",
+      source: "confirmed-disaster-area",
+      paint: {
+        "line-color": "#fbbf24",
+        "line-opacity": 0.72,
+        "line-width": 1.75,
+        "line-dasharray": [2, 2],
+      },
+    })
+  }
+  if (!map.getSource("draft-disaster-area")) {
+    map.addSource("draft-disaster-area", { type: "geojson", data: boundsCollection(draftBounds) })
+    map.addLayer({
+      id: "draft-disaster-area-fill",
+      type: "fill",
+      source: "draft-disaster-area",
       paint: { "fill-color": "#22d3ee", "fill-opacity": 0.2 },
     })
     map.addLayer({
-      id: "selected-disaster-area-outline",
+      id: "draft-disaster-area-outline",
       type: "line",
-      source: "selected-disaster-area",
+      source: "draft-disaster-area",
       paint: { "line-color": "#a5f3fc", "line-opacity": 0.95, "line-width": 2.5 },
     })
   }
@@ -205,8 +230,8 @@ function addAtmosphere(map: MapboxMap) {
   }
 }
 
-function setSelectionData(map: MapboxMap | null, bounds: DisasterAreaBounds | null) {
-  const source = map?.getSource("selected-disaster-area") as GeoJSONSource | undefined
+function setBoundsData(map: MapboxMap | null, sourceId: string, bounds: DisasterAreaBounds | null) {
+  const source = map?.getSource(sourceId) as GeoJSONSource | undefined
   source?.setData(boundsCollection(bounds))
 }
 
@@ -229,7 +254,7 @@ interface SavedCamera {
 }
 
 export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
-  const { bounds, focusPlace, selectionEnabled } = props
+  const { confirmedBounds, draftBounds, focusPlace, selectionEnabled } = props
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapboxMap | null>(null)
   const mapboxLibrary = useRef<typeof import("mapbox-gl").default | null>(null)
@@ -246,7 +271,8 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
 
   useEffect(() => {
     currentProps.current = props
-    setSelectionData(map.current, bounds)
+    setBoundsData(map.current, "confirmed-disaster-area", confirmedBounds)
+    setBoundsData(map.current, "draft-disaster-area", draftBounds)
     if (map.current) {
       const activeMap = map.current
       activeMap.getCanvas().style.cursor = selectionEnabled ? "crosshair" : "grab"
@@ -280,7 +306,7 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
         if (previousCamera) activeMap.easeTo({ ...previousCamera, duration: 400 })
       }
     }
-  }, [bounds, props, selectionEnabled])
+  }, [confirmedBounds, draftBounds, props, selectionEnabled])
 
   useEffect(() => {
     if (!mapboxToken || !container.current || mapFailed) return
@@ -325,7 +351,11 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
           addTerrain(initializedMap)
           addAtmosphere(initializedMap)
           addBuildingLayer(initializedMap)
-          addSelectionLayer(initializedMap, currentProps.current.bounds)
+          addSelectionLayers(
+            initializedMap,
+            currentProps.current.confirmedBounds,
+            currentProps.current.draftBounds,
+          )
           setNavigationEnabled(initializedMap, !currentProps.current.selectionEnabled)
           initializedMap.getCanvas().style.cursor = currentProps.current.selectionEnabled ? "crosshair" : "grab"
           if (currentProps.current.selectionEnabled) {
@@ -349,21 +379,21 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
         const beginSelection = (coordinates: Coordinates) => {
           if (!currentProps.current.selectionEnabled || !drawingReadyRef.current || !initializedMap) return
           startCorner.current = coordinates
-          setSelectionData(initializedMap, null)
+          setBoundsData(initializedMap, "draft-disaster-area", null)
         }
         const updateSelection = (coordinates: Coordinates) => {
           if (!startCorner.current || !initializedMap) return
-          setSelectionData(initializedMap, boundsFromCorners(startCorner.current, coordinates))
+          setBoundsData(initializedMap, "draft-disaster-area", boundsFromCorners(startCorner.current, coordinates))
         }
         const finishSelection = (coordinates: Coordinates) => {
           if (!startCorner.current || !initializedMap) return
           const nextBounds = boundsFromCorners(startCorner.current, coordinates)
           startCorner.current = null
           if (isValidBounds(nextBounds)) {
-            currentProps.current.onBoundsChange(nextBounds)
+            currentProps.current.onDraftBoundsChange(nextBounds)
             currentProps.current.onSelectionComplete()
           } else {
-            setSelectionData(initializedMap, currentProps.current.bounds)
+            setBoundsData(initializedMap, "draft-disaster-area", currentProps.current.draftBounds)
           }
         }
 
@@ -493,16 +523,18 @@ function fallbackBoundsRect(bounds: DisasterAreaBounds) {
 }
 
 function FallbackAreaMap({
-  bounds,
+  confirmedBounds,
+  draftBounds,
   selectionEnabled,
-  onBoundsChange,
+  onDraftBoundsChange,
   onSelectionComplete,
 }: DisasterAreaSelectionMapProps) {
   const element = useRef<HTMLDivElement>(null)
   const startPoint = useRef<Coordinates | null>(null)
-  const [draftBounds, setDraftBounds] = useState<DisasterAreaBounds | null>(null)
-  const visibleBounds = draftBounds ?? bounds
-  const rect = visibleBounds ? fallbackBoundsRect(visibleBounds) : null
+  const [draftSelectionBounds, setDraftSelectionBounds] = useState<DisasterAreaBounds | null>(null)
+  const previewBounds = draftSelectionBounds ?? draftBounds
+  const confirmedRect = confirmedBounds ? fallbackBoundsRect(confirmedBounds) : null
+  const draftRect = previewBounds ? fallbackBoundsRect(previewBounds) : null
 
   function eventPoint(event: React.PointerEvent<HTMLDivElement>) {
     const box = element.current!.getBoundingClientRect()
@@ -520,25 +552,25 @@ function FallbackAreaMap({
         if (!selectionEnabled) return
         event.currentTarget.setPointerCapture(event.pointerId)
         startPoint.current = eventPoint(event)
-        setDraftBounds(null)
+        setDraftSelectionBounds(null)
       }}
       onPointerMove={(event) => {
         if (!startPoint.current) return
-        setDraftBounds(boundsFromCorners(startPoint.current, eventPoint(event)))
+        setDraftSelectionBounds(boundsFromCorners(startPoint.current, eventPoint(event)))
       }}
       onPointerUp={(event) => {
         if (!startPoint.current) return
         const nextBounds = boundsFromCorners(startPoint.current, eventPoint(event))
         startPoint.current = null
-        setDraftBounds(null)
+        setDraftSelectionBounds(null)
         if (isValidBounds(nextBounds)) {
-          onBoundsChange(nextBounds)
+          onDraftBoundsChange(nextBounds)
           onSelectionComplete()
         }
       }}
       onPointerCancel={() => {
         startPoint.current = null
-        setDraftBounds(null)
+        setDraftSelectionBounds(null)
       }}
     >
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 900 700" preserveAspectRatio="none" aria-hidden="true">
@@ -548,8 +580,19 @@ function FallbackAreaMap({
           <path d="M-60 520 C180 500 295 580 520 520 S770 390 960 430" strokeWidth="6" />
           <path d="M175 -30 C220 160 330 250 510 300 S780 335 950 270" strokeWidth="5" />
         </g>
-        {rect && (
-          <rect {...rect} fill="#22d3ee" fillOpacity="0.2" stroke="#a5f3fc" strokeWidth="3" />
+        {confirmedRect && (
+          <rect
+            {...confirmedRect}
+            fill="#f59e0b"
+            fillOpacity="0.07"
+            stroke="#fbbf24"
+            strokeOpacity="0.72"
+            strokeWidth="2"
+            strokeDasharray="8 7"
+          />
+        )}
+        {draftRect && (
+          <rect {...draftRect} fill="#22d3ee" fillOpacity="0.2" stroke="#a5f3fc" strokeWidth="3" />
         )}
       </svg>
     </div>

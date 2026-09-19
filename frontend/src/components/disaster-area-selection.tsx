@@ -5,6 +5,7 @@ import { ArrowRight, BoxSelect, Radar, Trash2 } from "lucide-react"
 import { motion } from "framer-motion"
 import { DisasterAreaSelectionMap } from "@/src/components/disaster-area-selection-map"
 import { PlaceSearchInput } from "@/src/components/place-search-input"
+import { WorkflowProgress } from "@/src/components/workflow-progress"
 import {
   incident,
   type Coordinates,
@@ -13,22 +14,24 @@ import {
 } from "@/src/data/mock-disaster-data"
 
 interface DisasterAreaSelectionProps {
-  bounds: DisasterAreaBounds | null
-  onBoundsChange: (bounds: DisasterAreaBounds | null) => void
-  onConfirm: () => void
+  confirmedBounds: DisasterAreaBounds | null
+  confirmedPlace: SelectedPlace | null
+  onConfirm: (bounds: DisasterAreaBounds, place: SelectedPlace | null) => void
 }
 
-const steps = ["Area", "Imagery", "Analysis", "Route"]
-
-export function DisasterAreaSelection({ bounds, onBoundsChange, onConfirm }: DisasterAreaSelectionProps) {
-  const [searchPlace, setSearchPlace] = useState<SelectedPlace | null>(null)
+export function DisasterAreaSelection({ confirmedBounds, confirmedPlace, onConfirm }: DisasterAreaSelectionProps) {
+  const [draftBounds, setDraftBounds] = useState<DisasterAreaBounds | null>(null)
+  const [searchPlace, setSearchPlace] = useState<SelectedPlace | null>(confirmedPlace)
   const [selectionEnabled, setSelectionEnabled] = useState(false)
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
   const proximity = useMemo<Coordinates>(() => searchPlace
     ? [searchPlace.longitude, searchPlace.latitude]
     : incident.center,
   [searchPlace])
-  const hasValidBounds = Boolean(bounds && bounds.east > bounds.west && bounds.north > bounds.south)
+  const boundsToConfirm = draftBounds ?? confirmedBounds
+  const hasValidBounds = Boolean(
+    boundsToConfirm && boundsToConfirm.east > boundsToConfirm.west && boundsToConfirm.north > boundsToConfirm.south,
+  )
 
   return (
     <motion.main
@@ -45,14 +48,7 @@ export function DisasterAreaSelection({ bounds, onBoundsChange, onConfirm }: Dis
             </div>
             <span className="text-sm font-semibold text-white">DisasterLens</span>
           </div>
-          <ol className="hidden items-center gap-2 sm:flex" aria-label="Workflow progress">
-            {steps.map((step, index) => (
-              <li key={step} className="flex items-center gap-2 text-[11px]">
-                <span className={index === 0 ? "text-cyan-300" : "text-slate-600"}>{index + 1}. {step}</span>
-                {index < steps.length - 1 && <span className="h-px w-5 bg-slate-800" />}
-              </li>
-            ))}
-          </ol>
+          <WorkflowProgress currentStep="area" />
         </div>
       </header>
 
@@ -95,47 +91,64 @@ export function DisasterAreaSelection({ bounds, onBoundsChange, onConfirm }: Dis
             aria-pressed={selectionEnabled}
           >
             <BoxSelect className="size-4" />
-            {selectionEnabled ? "Cancel drawing" : bounds ? "Redraw area" : "Select disaster area"}
+            {selectionEnabled ? "Cancel drawing" : confirmedBounds ? "Redraw area" : "Select disaster area"}
           </button>
         </div>
 
         <DisasterAreaSelectionMap
-          bounds={bounds}
+          confirmedBounds={confirmedBounds}
+          draftBounds={draftBounds}
           focusPlace={searchPlace}
           selectionEnabled={selectionEnabled}
-          onBoundsChange={onBoundsChange}
+          onDraftBoundsChange={setDraftBounds}
           onSelectionComplete={() => setSelectionEnabled(false)}
         />
 
         <div className="mt-4 flex flex-col gap-4 border-t border-white/[0.07] pt-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-200">Selected area</p>
-            {bounds ? (
-              <div className="mt-2 flex flex-wrap gap-x-8 gap-y-2 text-xs text-slate-400">
-                <p><span className="mr-2 text-slate-600">Northwest</span>{bounds.north.toFixed(4)}, {bounds.west.toFixed(4)}</p>
-                <p><span className="mr-2 text-slate-600">Southeast</span>{bounds.south.toFixed(4)}, {bounds.east.toFixed(4)}</p>
-              </div>
-            ) : (
+            <p className="text-sm font-medium text-slate-200">Analysis area</p>
+            {!confirmedBounds && !draftBounds ? (
               <p className="mt-1 text-xs text-slate-600">Draw a rectangle on the map to define the analysis region.</p>
-            )}
+            ) : <div className="mt-2 space-y-3 text-xs text-slate-400">
+              {confirmedBounds && (
+                <div>
+                  <p className="mb-1 font-medium text-amber-300/80">Saved incident area</p>
+                  <div className="flex flex-wrap gap-x-8 gap-y-1">
+                    <p><span className="mr-2 text-slate-600">Northwest</span>{confirmedBounds.north.toFixed(4)}, {confirmedBounds.west.toFixed(4)}</p>
+                    <p><span className="mr-2 text-slate-600">Southeast</span>{confirmedBounds.south.toFixed(4)}, {confirmedBounds.east.toFixed(4)}</p>
+                  </div>
+                </div>
+              )}
+              {draftBounds && (
+                <div>
+                  <p className="mb-1 font-medium text-cyan-300">Draft area</p>
+                  <div className="flex flex-wrap gap-x-8 gap-y-1">
+                    <p><span className="mr-2 text-slate-600">Northwest</span>{draftBounds.north.toFixed(4)}, {draftBounds.west.toFixed(4)}</p>
+                    <p><span className="mr-2 text-slate-600">Southeast</span>{draftBounds.south.toFixed(4)}, {draftBounds.east.toFixed(4)}</p>
+                  </div>
+                </div>
+              )}
+            </div>}
           </div>
           <div className="flex gap-3">
             <button
               type="button"
               className="area-secondary-button"
-              disabled={!bounds}
+              disabled={!draftBounds}
               onClick={() => {
-                onBoundsChange(null)
+                setDraftBounds(null)
                 setSelectionEnabled(false)
               }}
             >
-              <Trash2 className="size-4" /> Clear selection
+              <Trash2 className="size-4" /> {confirmedBounds ? "Discard draft" : "Clear selection"}
             </button>
             <button
               type="button"
               className="area-primary-button"
               disabled={!hasValidBounds}
-              onClick={onConfirm}
+              onClick={() => {
+                if (boundsToConfirm) onConfirm(boundsToConfirm, searchPlace)
+              }}
             >
               Confirm area <ArrowRight className="size-4" />
             </button>
