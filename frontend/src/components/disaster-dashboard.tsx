@@ -45,9 +45,11 @@ import {
 } from "@/src/data/mock-disaster-data"
 
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
+type DashboardTab = "situation-map" | "routes" | "incidents"
 
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
+  const [activeTab, setActiveTab] = useState<DashboardTab>("situation-map")
   const [disasterAreaBounds, setDisasterAreaBounds] = useState<DisasterAreaBounds | null>(null)
   const [areaConfirmed, setAreaConfirmed] = useState(false)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
@@ -240,9 +242,25 @@ export function DisasterDashboard() {
             <div className="p-4">
               <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400">Live operations</p>
               <nav aria-label="Primary navigation" className="mb-5 grid grid-cols-3 gap-1 xl:grid-cols-1">
-                <NavItem icon={MapIcon} label="Situation Map" active />
-                <NavItem icon={RouteIcon} label="Routes" />
-                <NavItem icon={AlertOctagon} label="Incidents" count="2" />
+                <NavItem
+                  icon={MapIcon}
+                  label="Situation Map"
+                  active={activeTab === "situation-map"}
+                  onSelect={() => setActiveTab("situation-map")}
+                />
+                <NavItem
+                  icon={RouteIcon}
+                  label="Routes"
+                  active={activeTab === "routes"}
+                  onSelect={() => setActiveTab("routes")}
+                />
+                <NavItem
+                  icon={AlertOctagon}
+                  label="Incidents"
+                  count={String(hazards.length)}
+                  active={activeTab === "incidents"}
+                  onSelect={() => setActiveTab("incidents")}
+                />
               </nav>
 
               <section className="border-t border-slate-800 pt-5" aria-labelledby="route-analysis-heading">
@@ -368,23 +386,59 @@ export function DisasterDashboard() {
           </aside>
 
           <div className="order-2 flex min-h-[520px] min-w-0 flex-col xl:min-h-0">
-            <DisasterMap
-              layers={mapLayers}
-              analysisComplete={analysisStatus === "complete"}
-              recommendedRoute={analysisResult?.route ?? null}
-              selectedHazardId={selectedHazard.id}
-              onSelectHazard={handleHazardSelection}
-              startingPlace={startingPlace}
-              destinationPlace={displayedDestinationPlace}
-              destinationType={displayedDestinationType}
-              disasterAreaBounds={disasterAreaBounds}
-            />
+            {activeTab === "situation-map" ? (
+              <DisasterMap
+                layers={mapLayers}
+                analysisComplete={analysisStatus === "complete"}
+                recommendedRoute={analysisResult?.route ?? null}
+                selectedHazardId={selectedHazard.id}
+                onSelectHazard={handleHazardSelection}
+                startingPlace={startingPlace}
+                destinationPlace={displayedDestinationPlace}
+                destinationType={displayedDestinationType}
+                disasterAreaBounds={disasterAreaBounds}
+              />
+            ) : (
+              <section className="flex-1 overflow-y-auto bg-[#070b12] p-4 sm:p-6 lg:p-8">
+                <div className="mx-auto max-w-4xl">
+                  <div className="mb-5 flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400">
+                        {activeTab === "routes" ? "Route intelligence" : "Incident intelligence"}
+                      </p>
+                      <h1 className="mt-1 text-xl font-semibold text-white">
+                        {activeTab === "routes" ? "Routes" : "Current incidents"}
+                      </h1>
+                    </div>
+                    <span className="mock-badge">Mock data</span>
+                  </div>
+
+                  {activeTab === "routes" ? (
+                    <RouteRecommendationPanel
+                      status={analysisStatus}
+                      recommendation={analysisResult?.recommendation ?? null}
+                      error={analysisError}
+                    />
+                  ) : (
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      {hazards.map((hazard) => (
+                        <DamageDetailsPanel key={hazard.id} hazard={hazard} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
           </div>
 
           <aside className="order-3 border-t border-white/[0.07] bg-[#080c13] xl:overflow-y-auto xl:border-l xl:border-t-0">
             <div className="space-y-3 p-3">
-              <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} />
-              <DamageDetailsPanel hazard={selectedHazard} />
+              {activeTab === "situation-map" && (
+                <>
+                  <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} />
+                  <DamageDetailsPanel hazard={selectedHazard} />
+                </>
+              )}
               <WhatChangedFeed events={changeEvents} />
               <div className="xl:hidden"><LiveDataSources /></div>
               <p className="px-2 pb-2 text-center text-[9px] leading-4 text-slate-700">
@@ -403,15 +457,19 @@ function NavItem({
   label,
   active = false,
   count,
+  onSelect,
 }: {
   icon: typeof CircleDot
   label: string
   active?: boolean
   count?: string
+  onSelect: () => void
 }) {
   return (
     <button
       type="button"
+      onClick={onSelect}
+      aria-current={active ? "page" : undefined}
       className={`flex min-h-9 items-center justify-center gap-2 rounded-lg px-2.5 text-xs transition-colors xl:justify-start ${
         active ? "bg-cyan-400/10 text-cyan-200" : "text-slate-500 hover:bg-white/[0.04] hover:text-slate-300"
       }`}

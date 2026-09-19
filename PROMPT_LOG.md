@@ -574,3 +574,36 @@ Make the greyed-out Analyze Route button work when the user has selected real Ma
 - `npx tsc --noEmit`: passed.
 - `npm run build -- --webpack`: passed, including static generation.
 - No backend, dependency manifest, or environment files were changed.
+
+---
+
+## Functional Dashboard Navigation Tabs — 2026-09-19
+
+### Request
+
+Make the Situation Map, Routes, and Incidents sidebar items functional while preserving route-analysis state and the existing map behavior.
+
+### Files Changed
+
+- `frontend/src/components/disaster-dashboard.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Added dashboard tab state and functional sidebar buttons with a clear active style and `aria-current` state.
+- Kept Situation Map as the main operational view with the existing map, recommendation, selected-hazard details, and activity feed.
+- Added a Routes view that reuses the existing recommendation panel to show the recommended route, destination, alternative, travel time, distance, risk, confidence, hazards avoided, priority, and explanation.
+- Added an Incidents view that reuses the existing hazard panel for every mock hazard, including severity, confidence, source, detection time, affected infrastructure, and verification status.
+- Kept route-analysis and selection state in the dashboard so results remain available while switching tabs.
+
+### Decisions
+
+- Reused the existing route and hazard panels instead of duplicating their display logic.
+- Kept route controls and the operational feed available across tabs.
+- Did not change `disaster-map.tsx`, Mapbox configuration, disaster-area selection, mock data, dependencies, backend files, or environment files.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation.
+- `git diff --check`: passed before this log entry; line-ending warnings were informational.
