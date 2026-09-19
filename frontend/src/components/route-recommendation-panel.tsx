@@ -1,17 +1,19 @@
 import { motion } from "framer-motion"
-import { AlertTriangle, Check, Clock3, Gauge, MapPinned, ShieldCheck } from "lucide-react"
+import { AlertTriangle, Check, Clock3, Eye, Gauge, MapPinned, ShieldCheck } from "lucide-react"
 import { responderModes, type RouteRecommendation } from "@/src/data/mock-disaster-data"
 
 interface RouteRecommendationPanelProps {
   status: "idle" | "analyzing" | "complete" | "error"
   recommendation: RouteRecommendation | null
   error: string
+  onViewEvidence?: () => void
 }
 
 export function RouteRecommendationPanel({
   status,
   recommendation,
   error,
+  onViewEvidence,
 }: RouteRecommendationPanelProps) {
   if (status === "error") {
     return (
@@ -110,6 +112,12 @@ export function RouteRecommendationPanel({
           )}
         </ul>
       </div>
+
+      {onViewEvidence && (
+        <button type="button" onClick={onViewEvidence} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/[0.07] px-3 py-2 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-400/10">
+          <Eye className="size-3.5" aria-hidden="true" /> View Evidence
+        </button>
+      )}
 
       <div className="mt-5 rounded-lg border border-amber-400/15 bg-amber-400/[0.04] p-3">
         <div className="flex items-center justify-between gap-3">

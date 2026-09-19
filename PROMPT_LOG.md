@@ -6,6 +6,199 @@ AI assistants should read this file before making changes and add a short entry 
 
 ---
 
+## Wide-Area Context and High-Resolution Analysis — 2026-09-19
+
+### Request
+
+Separate NASA GIBS wide-area context from high-resolution manual imagery so only a complete uploaded pair enables detailed Analyze Damage, while NASA-only sessions can still continue to route planning.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `frontend/src/components/hazard-evidence-panel.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+
+### Implemented
+
+- Changed the session imagery state to retain NASA context and manual uploads independently instead of replacing one source with the other.
+- Relabeled current NASA displays as “NASA GIBS wide-area satellite context” and added the required notice about broad patterns and insufficient resolution for individual road or building verification.
+- Preserved the existing NASA fetch, metadata cards, remote image URLs, evidence modal, and full-image viewer.
+- Added a distinct “Upload high-resolution imagery for detailed damage analysis.” section using the existing upload validation and browser `File` state.
+- Required both high-resolution uploads before enabling detailed Analyze Damage and displayed the required upload guidance while disabled.
+- Added a NASA-only Continue to route planning action that creates a clearly labeled wide-area mock flood-pattern summary for the selected bounds.
+- Detailed upload analysis creates the existing road and bridge demo hazards only after the multipart transport succeeds.
+- Stored the uploaded `File` objects in the existing session analysis result and generated temporary, revoked browser object URLs so the evidence modal and lightbox show the exact uploaded images.
+- Kept selected bounds, route flow, Mapbox behavior, backend endpoints, and repository image storage unchanged.
+
+### Validation
+
+- `npm run lint`: passed after replacing effect-driven URL state with one-time object URL initialization and cleanup.
+- `npm run build`: passed.
+- `python -m pytest backend/test_main.py`: passed (19 tests; one existing Starlette multipart deprecation warning).
+- `git diff --check`: passed before this log entry.
+
+---
+
+## NASA Evidence Full-Image Viewer — 2026-09-19
+
+### Request
+
+Add a larger lightbox for the existing Before and After NASA GIBS evidence images with simple zoom controls and complete evidence metadata.
+
+### Files Changed
+
+- `frontend/src/components/hazard-evidence-panel.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Made each available compact evidence image an accessible full-image viewer trigger while preserving the side-by-side evidence cards.
+- Added a nested full-screen lightbox that renders the saved remote URL with `object-contain` and does not create new image state or storage.
+- Added zoom in, zoom out, reset zoom, close, backdrop-close, and Escape handling with bounded 50–300 percent zoom.
+- Escape closes the lightbox first and keeps the underlying evidence modal open.
+- Displayed the existing source, capture date, imagery layer, and selected bounding box in the viewer.
+- Added a clear failed or missing URL state that returns to the existing manual upload flow.
+- Kept satellite retrieval, Mapbox, routing, backend behavior, and image storage unchanged.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `python -m pytest backend/test_main.py`: passed (19 tests; one existing Starlette multipart deprecation warning).
+- `git diff --check`: passed before this log entry.
+
+---
+
+## GIBS Transparency and Evidence Images — 2026-09-19
+
+### Request
+
+Clarify NASA GIBS imagery quality and display-size limits, persist the fetched Before and After references in analysis state, and show those exact images in the existing View Evidence modal.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `frontend/src/components/hazard-evidence-panel.tsx`
+- `frontend/src/components/route-recommendation-panel.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+
+### Implemented
+
+- Replaced provider wording with “NASA GIBS wide-area satellite imagery” and the requested detailed-assessment guidance.
+- Clarified that the existing `1024 x 1024` WMS dimensions are display size only and do not improve source satellite resolution.
+- Preserved the original NASA Before and After URLs, requested dates, layer names, source, and bounds in the existing session-scoped demo analysis result.
+- Replaced evidence placeholders with side-by-side rendering of the exact saved NASA URLs.
+- Added source, capture date, selected bounds, wide-area guidance, and human-verification messaging to the evidence modal.
+- Added missing, expired, and failed-URL handling with a direct return to the existing manual upload step.
+- Reused the evidence modal for existing hazard and incident actions, demo-analysis hazards, and completed route recommendations.
+- Kept remote imagery out of the repository and did not change NASA retrieval, Mapbox, or routing behavior.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `python -m pytest backend/test_main.py`: passed (19 tests; one existing Starlette multipart deprecation warning).
+- `git diff --check`: passed before this log entry.
+
+---
+
+## Analysis-to-Route Workflow Connection — 2026-09-19
+
+### Request
+
+Connect the step 3 Analyze damage action to step 4, create a bounding-box-scoped demo damage result, and reuse the existing route dashboard and API with the detected-hazard context.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `backend/main.py`
+- `backend/test_main.py`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+- `frontend/src/lib/route-analysis.ts`
+
+### Implemented
+
+- Added a typed demo damage-analysis result containing selected bounds, imagery labels, two potential hazards, severity, confidence, and affected infrastructure.
+- Successful manual or NASA GIBS analysis transport now stores that result in the parent dashboard and advances the progress indicator to step 4.
+- Reused the existing route dashboard, selectors, Analyze Route action, API utility, recommendation panel, and map without modifying Mapbox code.
+- Added a selected-area and demo-hazard summary plus Back to Analysis navigation to the route dashboard.
+- Extended the existing route request with optional selected-area and detected-hazard context while preserving three-field standalone requests.
+- Backend and frontend mock route explanations now state that the route avoids the named demo hazards in the selected bounding box.
+- Added backend coverage for contextual hazard names, selected bounds, hazards avoided, and the explanation.
+
+### Decisions
+
+- Potential hazards are deterministic demo fixtures derived after a successful transport receipt; they are not presented as computer-vision detections.
+- The existing standalone route behavior remains unchanged when no damage-analysis context is supplied.
+- NASA GIBS retrieval and both manual and satellite analysis receipt paths remain unchanged.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed.
+- `python -m pytest backend/test_main.py`: passed (19 tests; one existing Starlette multipart deprecation warning).
+- `git diff --check`: passed before this log entry.
+
+---
+
+## NASA GIBS Before/After Imagery — 2026-09-19
+
+### Request
+
+Replace the Copernicus satellite provider with NASA Global Imagery Browse Services WMS imagery for the user-selected bounding box and dates while preserving manual uploads and the existing map and route behavior.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `backend/.env.example`
+- `backend/main.py`
+- `backend/satellite_imagery.py`
+- `backend/test_main.py`
+- `frontend/next.config.ts`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `frontend/src/lib/damage-analysis.ts`
+- `frontend/src/lib/satellite-imagery.ts`
+
+### Implemented
+
+- Replaced Copernicus authentication and catalog code with credential-free NASA GIBS WMS 1.1.1 `GetMap` URL generation.
+- Uses the documented `MODIS_Terra_CorrectedReflectance_TrueColor` layer, the exact `[minLng, minLat, maxLng, maxLat]` bounds, `EPSG:4326`, `image/jpeg`, selected dates, and `1024 x 1024` output.
+- Validates date coverage and ordered world bounds, checks both NASA responses for image content, and returns a clear unavailable result without replacing current imagery when either request fails.
+- Returns and validates typed NASA source, layer, requested-date, bounds, image URL, and live/demo metadata.
+- Populates the existing Before and After panels with remote NASA images without saving them in the repository.
+- Preserved the existing manual file upload path and added a small receipt endpoint for validated NASA GIBS image references so Analyze Damage can accept either source.
+- Restricted satellite analysis references to HTTPS NASA GIBS GetMap URLs whose bounds match the confirmed area.
+- Added the required wide-area situational-awareness and human-verification notice.
+- Replaced provider credential instructions with credential-free NASA setup and EOSDIS attribution.
+
+### Decisions
+
+- NASA GIBS is the default provider and needs no secret configuration; `mock` remains available for deterministic offline demonstrations.
+- Provider failures do not silently substitute demo images. The UI reports the failure and retains manual upload as the fallback.
+- The analysis endpoints still validate transport only and do not claim damage detection.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npm run build`: passed after allowing Next.js to spawn its TypeScript workers; the sandboxed attempt compiled and then hit Windows `spawn EPERM`.
+- `python -m pytest backend/test_main.py`: passed (18 tests). The already-declared `python-multipart` requirement had to be installed in the active Python interpreter before collection.
+- `git diff --check`: passed before this log entry.
+
+---
+
 ## Initial Project Setup
 
 ### Request
@@ -918,143 +1111,3 @@ Resolve the active rebase conflicts while preserving satellite imagery metadata 
 - `git diff --check`: passed before this log entry.
 - Browser interaction checks remain pending because no connected browser was available.
 - No dependencies, environment values, CORS, fake imagery files, or damage detections were added.
-
----
-
-## Geospatial Intelligence Globe Intro — 2026-09-19
-
-### Request
-
-Redesign the existing React Three Fiber intro into a restrained black-and-cyan geospatial globe with recognizable dotted continents, satellite activity, illustrative geographic signals, camera movement, reduced-motion support, and a safe WebGL fallback.
-
-### Files Changed
-
-- `frontend/src/components/three-dimensional-globe.tsx`
-- `frontend/public/data/natural-earth-land-110m.svg`
-- `PROMPT_LOG.md`
-
-### Implemented
-
-- Added a compact local mask derived from the public-domain Natural Earth 1:110m land dataset; the application performs no runtime geographic network request.
-- Samples deterministic Fibonacci-sphere candidates against the mask once per intro mount and creates one reusable `THREE.Points` continent geometry with deterministic cyan color variation.
-- Added a nearly black base sphere, restrained BackSide atmosphere, deterministic stars, three orbit paths, moving satellite indicators, six illustrative pulses, two sparse data arcs, a scan ring, and three background telemetry streak events using the existing Three.js and React Three Fiber dependencies.
-- Added slow delta-based rotation, subtle ref-driven pointer parallax, and a final weighted transition that removes rotation/parallax influence before orienting toward North America and moving the camera closer.
-- Preserved the public `onComplete()` interface and routed automatic completion, Skip intro, and fallback Continue through one guarded callback with timer cleanup.
-- Added reduced-motion behavior and Canvas/error-boundary DOM fallback without changing Area Selection or any later application workflow.
-
-### Validation
-
-- `npm run lint`: passed.
-- `npx tsc --noEmit`: passed.
-- `npm run build`: blocked by the existing Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including an approved retry outside the sandbox.
-- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
-- A connected browser was unavailable, so visual timing, pointer, reduced-motion, WebGL-fallback, mobile, and intro-to-Area interaction checks remain pending.
-- No backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, dependency manifest, or global-style files were changed.
-
----
-
-## Realistic NASA Earth Intro — 2026-09-19
-
-### Request
-
-Replace the dotted globe as the primary intro Earth with a realistic, naturally colored planet while retaining restrained DisasterLens satellite and geographic-intelligence overlays.
-
-### Files Changed
-
-- `frontend/src/components/three-dimensional-globe.tsx`
-- `frontend/public/earth/nasa-blue-marble-2048.jpg`
-- `frontend/public/earth/nasa-clouds-2048.jpg`
-- `PROMPT_LOG.md`
-
-### Implemented
-
-- Replaced the point-cloud land surface with NASA Visible Earth 2048×1024 Blue Marble imagery on a lit `MeshStandardMaterial` sphere.
-- Added NASA's 2048×1024 Blue Marble cloud composite as the alpha map for a separate transparent cloud sphere rotating slightly faster than the surface.
-- Added warm directional sunlight, restrained ambient fill, a subtle BackSide atmosphere, and a dark loading sphere while core textures decode.
-- Delayed the automatic completion timer until both required local textures are loaded; Skip and fallback Continue retain the same guarded completion callback.
-- Retained deterministic stars, subtle orbit paths and satellite indicators, four illustrative observation pulses, sparse arcs, scan, and background telemetry streaks.
-- Reduced the realistic Earth's rotation speed and retained the final transition that removes normal rotation and pointer influence before moving toward North America.
-- Removed the now-unused Natural Earth dotted-globe mask after confirming it had no remaining runtime reference.
-
-### Asset Source and Usage
-
-- Surface: NASA Visible Earth, Blue Marble `land_ocean_ice_2048.jpg`.
-- Clouds: NASA Visible Earth, Blue Marble `cloud_combined_2048.jpg`.
-- NASA states that its imagery is generally not subject to copyright in the United States and permits informational and educational web use under its media usage guidelines; NASA is acknowledged here as the source and no endorsement is implied.
-
-### Validation
-
-- `npm run lint`: passed.
-- `npx tsc --noEmit`: passed.
-- `npm run build`: blocked by the existing Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including an approved retry outside the sandbox.
-- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
-- Browser visual checks remain pending because no connected browser was available.
-- No dependency, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.
-
----
-
-## Cinematic Earth Clarity and Lighting — 2026-09-19
-
-### Request
-
-Refine only the realistic intro Earth so its surface is clearer, the day/night division is more cinematic, and the planet blends more naturally into space while preserving the intro lifecycle and every post-intro workflow.
-
-### Files Changed
-
-- `frontend/src/components/three-dimensional-globe.tsx`
-- `PROMPT_LOG.md`
-
-### Implemented
-
-- Applied mipmapped linear filtering and renderer-supported anisotropy, capped at 16, to the existing local NASA surface and cloud textures.
-- Raised the Canvas device-pixel-ratio ceiling from 1.5 to 2 and modestly increased globe geometry resolution for cleaner Retina rendering.
-- Reduced cloud opacity and separation from the surface so continents and oceans remain crisp beneath recognizable cloud shapes.
-- Rebalanced the warm directional sun, cool ambient fill, and night-side point light to create a clearer illuminated hemisphere and terminator while retaining readable shadow detail.
-- Removed metallic surface response, refined roughness, narrowed and softened the atmosphere, and reduced the component-local radial glow so Earth sits naturally in black space without a heavy cyan halo.
-- Lowered the visual prominence of orbit paths, satellites, geographic signals, arcs, scan, and telemetry streaks while preserving their existing timing and behavior.
-- Preserved rotation speed, final North America orientation, reduced-motion behavior, loading and WebGL fallbacks, guarded Skip/automatic completion, and the public `onComplete()` interface.
-
-### Validation
-
-- `npm run lint`: passed.
-- `npx tsc --noEmit`: passed.
-- `npm run build`: remained blocked by the known Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including the approved outside-sandbox retry.
-- `npm run build -- --webpack`: passed, including TypeScript, static generation, and production optimization.
-- `git diff --check`: passed before this log entry.
-- Browser visual checks for texture sharpness, terminator balance, atmosphere, overlays, and the intro-to-Area transition remain pending because no connected browser was available.
-- No local Earth assets, dependencies, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.
-
----
-
-## Fixed-Sun Day/Night Earth Shader — 2026-09-19
-
-### Request
-
-Make the intro Earth read immediately as a real planet viewed from space, with roughly half the visible globe in daylight, a curved diagonal terminator, a much darker readable night side, matching cloud illumination, and a thin atmospheric limb.
-
-### Files Changed
-
-- `frontend/src/components/three-dimensional-globe.tsx`
-- `PROMPT_LOG.md`
-
-### Implemented
-
-- Replaced the Earth and cloud `MeshStandardMaterial` instances with compact local shader materials driven by one fixed normalized world-space sun direction.
-- Calculated illumination from the dot product of the world-space surface normal and world-space sun direction, with a narrow smoothstep transition around zero for the terminator.
-- Verified the globe hierarchy uses rotations and uniform scaling only, so the normalized model-matrix normal transform includes the actual globe rotation and remains valid for both Earth and clouds.
-- Kept the NASA surface texture in sRGB color space and applied lighting in linear space before Three.js tone-mapping and output-color-space shader chunks.
-- Rendered the night side from a low surface-texture contribution plus a blue-black tint rather than ambient scene lighting.
-- Confirmed the NASA cloud JPEG has three color channels and derived cloud opacity from RGB luminance. Cloud brightness uses the same fixed-sun calculation as Earth.
-- Replaced the broad atmosphere shell with a thin view-dependent Fresnel rim and removed obsolete scene lights.
-- Preserved the existing anisotropy cap, mipmap filters, DPR range, geometry, rotation, camera sequence, overlays, reduced-motion behavior, fallback, and guarded completion path.
-
-### Validation
-
-- `npm run lint`: passed.
-- `npx tsc --noEmit`: passed.
-- `npm run build`: remained blocked by the known Turbopack CSS-worker port-binding restriction (`Operation not permitted`).
-- `npm run build -- --webpack`: passed, including shader source bundling, TypeScript, static generation, and production optimization.
-- The existing frontend development server compiled the update and returned HTTP 200.
-- `git diff --check`: passed before this log entry.
-- Browser control was unavailable, so opening-frame sun direction, visible lit fraction, terminator composition, final rendered color balance, WebGL shader runtime output, cloud appearance, Fresnel limb, rotation, Skip, reduced-motion, and intro-to-Area visual checks remain pending.
-- No assets, dependencies, backend, Mapbox, Area Selection, imagery, analysis, routing, API, environment, or global-style files were changed.

@@ -1,4 +1,5 @@
 import type { DisasterAreaBounds } from "@/src/data/mock-disaster-data"
+import type { SatelliteImageMetadata } from "@/src/lib/satellite-imagery"
 
 export interface AnalyzeDamageResponse {
   status: "received"
@@ -8,6 +9,20 @@ export interface AnalyzeDamageResponse {
   before_content_type: string
   after_content_type: string
   bounds: DisasterAreaBounds
+  analysisPrepared?: boolean
+  analysisMessage?: string | null
+  analysisRasters?: Array<{
+    sceneId: string
+    captureDate: string
+    crs: string
+    width: number
+    height: number
+    bandNames: string[]
+    sampleType: string
+    estimatedResolutionMeters: number
+    byteSize: number
+    storage: "temporary-memory"
+  }>
 }
 
 function isReceipt(value: unknown): value is AnalyzeDamageResponse {
@@ -73,5 +88,39 @@ export async function analyzeDamage(
   if (!isReceipt(data)) {
     throw new Error("Damage-analysis service returned an incomplete response.")
   }
+  return data
+}
+
+export async function analyzeSatelliteDamage(
+  bounds: DisasterAreaBounds,
+  beforeImage: SatelliteImageMetadata,
+  afterImage: SatelliteImageMetadata,
+  signal: AbortSignal,
+): Promise<AnalyzeDamageResponse> {
+  if (!beforeImage.imageUrl || !afterImage.imageUrl) {
+    throw new Error("Live Sentinel-2 preview URLs are required. Choose other dates or use manual upload.")
+  }
+  const response = await fetch("/api/analyze-damage/satellite", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      beforeImageUrl: beforeImage.imageUrl,
+      afterImageUrl: afterImage.imageUrl,
+      beforeSceneId: beforeImage.id,
+      afterSceneId: afterImage.id,
+      beforeCaptureDate: beforeImage.captureDate,
+      afterCaptureDate: afterImage.captureDate,
+      afterTargetDate: afterImage.requestedDate,
+      bbox: [bounds.west, bounds.south, bounds.east, bounds.north],
+    }),
+    signal,
+  })
+  const data = await parseJson(response)
+  if (!response.ok) {
+    throw new Error(response.status === 422
+      ? "The Sentinel-2 imagery does not match the selected area. Fetch it again or use manual upload."
+      : "Damage-analysis service returned an error. Please try again.")
+  }
+  if (!isReceipt(data)) throw new Error("Damage-analysis service returned an incomplete response.")
   return data
 }

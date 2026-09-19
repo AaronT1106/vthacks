@@ -1,16 +1,22 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { ArrowLeft, ArrowRight, Cloud, ImagePlus, Radar, RefreshCw, Satellite, Trash2, Upload } from "lucide-react"
+import { ArrowLeft, ArrowRight, ImagePlus, Radar, RefreshCw, Satellite, Trash2, Upload } from "lucide-react"
 import { motion } from "framer-motion"
 import { WorkflowProgress } from "@/src/components/workflow-progress"
-import { fetchSatelliteImagery, type SatelliteImageMetadata } from "@/src/lib/satellite-imagery"
+import { fetchSatelliteImagery, getComparisonValidationFailure, isValidComparisonPair, type SatelliteImageMetadata } from "@/src/lib/satellite-imagery"
 import type { DisasterAreaBounds, SelectedPlace } from "@/src/data/mock-disaster-data"
 
-export type DisasterImagery =
-  | { source: null; beforeImage: null; afterImage: null }
-  | { source: "manual"; beforeImage: File | null; afterImage: File | null }
-  | { source: "satellite"; beforeImage: SatelliteImageMetadata; afterImage: SatelliteImageMetadata }
+export interface DisasterImagery {
+  satellite: {
+    beforeImage: SatelliteImageMetadata
+    afterImage: SatelliteImageMetadata
+  } | null
+  manual: {
+    beforeImage: File | null
+    afterImage: File | null
+  }
+}
 
 interface DisasterImageryStepProps {
   bounds: DisasterAreaBounds
@@ -52,6 +58,7 @@ function ImageUploadPanel({
   image,
   onImageChange,
   satelliteReadOnly = false,
+  onProviderFailure,
 }: {
   id: string
   title: string
@@ -59,6 +66,7 @@ function ImageUploadPanel({
   image: File | SatelliteImageMetadata | null
   onImageChange: (image: File | SatelliteImageMetadata | null) => void
   satelliteReadOnly?: boolean
+  onProviderFailure?: () => void
 }) {
   const input = useRef<HTMLInputElement>(null)
   const pendingUrl = useRef<string | null>(null)
@@ -110,6 +118,31 @@ function ImageUploadPanel({
     image.src = nextUrl
   }
 
+  async function reportRemoteImageError(imageUrl: string) {
+    const genericMessage = "Sentinel-2 could not display this scene. Try another date or use manual upload."
+    if (process.env.NODE_ENV !== "development") {
+      setError(genericMessage)
+      onProviderFailure?.()
+      return
+    }
+    try {
+      const response = await fetch(imageUrl, { cache: "no-store" })
+      const contentType = response.headers.get("content-type") ?? "unknown content type"
+      if (response.ok) {
+        setError(`Preview returned HTTP ${response.status} (${contentType}), but the browser could not decode the image.`)
+      } else {
+        const payload = await response.json().catch(() => null) as { detail?: unknown } | null
+        const detail = typeof payload?.detail === "string" && payload.detail.length <= 200
+          ? ` — ${payload.detail}`
+          : ""
+        setError(`Preview request failed with HTTP ${response.status}${detail}`)
+      }
+    } catch {
+      setError("Preview request could not reach the local proxy or backend.")
+    }
+    onProviderFailure?.()
+  }
+
   return (
     <section
       className={`rounded-xl border bg-[#0c111b] p-4 transition-colors sm:p-5 ${dragging ? "border-cyan-400/60" : "border-slate-800"}`}
@@ -158,14 +191,15 @@ function ImageUploadPanel({
                   onImageChange(null)
                 }}
               />
-            ) : image.previewUrl ? (
-              // Provider quicklooks are displayed directly and are never stored in this repository.
+            ) : image.imageUrl ? (
+              // Sentinel-2 previews are served from backend memory and never stored in this repository.
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={image.previewUrl}
-                alt={`${title} satellite quicklook`}
+                src={image.imageUrl}
+                alt={`${title} Sentinel-2 imagery`}
                 className="h-full w-full object-contain"
-                onError={() => setError("The provider quicklook is unavailable. Metadata remains usable or upload a local image.")}
+                onLoad={() => setError("")}
+                onError={() => void reportRemoteImageError(image.imageUrl!)}
               />
             ) : (
               <div className="px-6 text-center">
@@ -185,8 +219,15 @@ function ImageUploadPanel({
                   {image.dataMode === "live" ? "Live provider" : "Demo data"}
                 </span>
               </div>
-              <p>Captured {new Date(image.capturedAt).toLocaleString()}</p>
-              <p>Cloud coverage: {image.cloudCoverage === null ? "Not available" : `${image.cloudCoverage.toFixed(1)}%`}</p>
+              <p>Requested date: {image.requestedDate}</p>
+              <p>Captured: {new Date(image.captureDate).toLocaleString()}</p>
+              <p className="truncate" title={image.id}>Scene ID: {image.id}</p>
+              <p>Cloud cover: {image.cloudCoverage.toFixed(1)}%</p>
+              <p>Candidate scenes checked: {image.candidateCount}</p>
+              {image.selectionStatus === "higher-cloud-option" && (
+                <p className="font-medium text-amber-300">Higher cloud cover — verification limited.</p>
+              )}
+              <p className="truncate" title={image.layerName}>Layer: {image.layerName}</p>
             </div>
           )}
           {!satelliteReadOnly && (
@@ -240,45 +281,73 @@ export function DisasterImageryStep({
   const [fetching, setFetching] = useState(false)
   const [fetchMessage, setFetchMessage] = useState("")
   const [fetchError, setFetchError] = useState("")
+  const [pendingSatellite, setPendingSatellite] = useState<DisasterImagery["satellite"]>(null)
+  const [beforeCandidates, setBeforeCandidates] = useState<SatelliteImageMetadata[]>([])
+  const [afterCandidates, setAfterCandidates] = useState<SatelliteImageMetadata[]>([])
+  const [showManualUpload, setShowManualUpload] = useState(Boolean(
+    imagery.manual.beforeImage || imagery.manual.afterImage,
+  ))
   const validBounds = bounds.east > bounds.west && bounds.north > bounds.south
-  const canContinue = validBounds && (
-    imagery.source === "satellite"
-    || (imagery.source === "manual" && Boolean(imagery.beforeImage && imagery.afterImage))
-  )
-
-  function useManualImagery() {
-    onImageryChange({ source: "manual", beforeImage: null, afterImage: null })
-    setFetchMessage("")
-    setFetchError("")
-  }
+  const manualPairReady = Boolean(imagery.manual.beforeImage && imagery.manual.afterImage)
+  const canContinue = validBounds
 
   function updateManualImage(position: "before" | "after", image: File | SatelliteImageMetadata | null) {
     if (image && !isLocalFile(image)) return
-    const manualImagery = imagery.source === "manual"
-      ? imagery
-      : { source: "manual" as const, beforeImage: null, afterImage: null }
     onImageryChange({
-      source: "manual",
-      beforeImage: position === "before" ? image : manualImagery.beforeImage,
-      afterImage: position === "after" ? image : manualImagery.afterImage,
+      ...imagery,
+      manual: {
+        beforeImage: position === "before" ? image : imagery.manual.beforeImage,
+        afterImage: position === "after" ? image : imagery.manual.afterImage,
+      },
     })
   }
 
   async function retrieveAvailableImagery() {
     if (!validBounds || fetching) return
+    if (!beforeDate || !afterDate) {
+      setFetchError("Choose both a Before date and an After date.")
+      return
+    }
     setFetching(true)
     setFetchError("")
     setFetchMessage("")
     try {
       const result = await fetchSatelliteImagery({ bounds, beforeDate, afterDate })
-      if (!result.before || !result.after) {
-        setFetchError(`${result.message} Upload both images manually to continue.`)
+      if (!result.before || !result.after || !result.comparisonReady || !isValidComparisonPair(result.before, result.after)) {
+        setPendingSatellite(null)
+        setBeforeCandidates([])
+        setAfterCandidates([])
+        const clientValidationFailure = result.before && result.after
+          ? getComparisonValidationFailure(result.before, result.after)
+          : null
+        const failureDetail = process.env.NODE_ENV === "development"
+          ? result.failure
+            ? `${result.failure.detail} [${result.failure.code} at ${result.failure.stage}]`
+            : clientValidationFailure ?? result.comparisonMessage ?? result.message
+          : result.comparisonMessage || result.message
+        setFetchError(`${failureDetail} Upload both images manually, or continue to route planning without detailed comparison.`)
+        setShowManualUpload(true)
         return
       }
-      onImageryChange({ source: "satellite", beforeImage: result.before, afterImage: result.after })
+      const pair = { beforeImage: result.before, afterImage: result.after }
+      setBeforeCandidates(result.beforeCandidates)
+      setAfterCandidates(result.afterCandidates)
+      if (result.status === "selection-required") {
+        setPendingSatellite(pair)
+        setFetchMessage(result.message)
+        setShowManualUpload(true)
+        return
+      }
+      setPendingSatellite(null)
+      onImageryChange({ ...imagery, satellite: pair })
       setFetchMessage(result.message)
+      setShowManualUpload(false)
     } catch (error) {
+      setPendingSatellite(null)
+      setBeforeCandidates([])
+      setAfterCandidates([])
       setFetchError(error instanceof Error ? error.message : "Satellite imagery lookup failed. Use manual upload.")
+      setShowManualUpload(true)
     } finally {
       setFetching(false)
     }
@@ -319,11 +388,11 @@ export function DisasterImageryStep({
             <div className="max-w-xl">
               <div className="flex items-center gap-2">
                 <Satellite className="size-4 text-cyan-300" aria-hidden="true" />
-                <h2 className="text-sm font-semibold text-white">Automatic satellite lookup</h2>
-                <span className="mock-badge">Provider or demo</span>
+                <h2 className="text-sm font-semibold text-white">Copernicus Sentinel-2 imagery</h2>
+                <span className="live-badge">Sentinel-2</span>
               </div>
               <p className="mt-2 text-xs leading-5 text-slate-400">
-                Search the configured provider for low-cloud imagery intersecting the exact selected bounds. Dates are optional.
+                Search for lower-cloud Sentinel-2 L2A scenes covering the exact selected area. Results can support local comparison, but potential damage still requires human verification.
               </p>
               <p className="mt-2 font-mono text-[10px] text-slate-600">
                 [{bounds.west.toFixed(5)}, {bounds.south.toFixed(5)}, {bounds.east.toFixed(5)}, {bounds.north.toFixed(5)}]
@@ -331,11 +400,11 @@ export function DisasterImageryStep({
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
               <label className="space-y-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-                Before cutoff
+                Before date
                 <input type="date" className="field-control block" value={beforeDate} onChange={(event) => setBeforeDate(event.target.value)} />
               </label>
               <label className="space-y-1.5 text-[10px] uppercase tracking-wider text-slate-500">
-                After start
+                After date
                 <input type="date" className="field-control block" value={afterDate} onChange={(event) => setAfterDate(event.target.value)} />
               </label>
             </div>
@@ -345,63 +414,149 @@ export function DisasterImageryStep({
               <RefreshCw className={`size-4 ${fetching ? "animate-spin" : ""}`} aria-hidden="true" />
               {fetching ? "Searching provider…" : "Fetch available satellite imagery"}
             </button>
-            <p className="flex items-center gap-1.5 text-[10px] text-slate-600">
-              <Cloud className="size-3.5" aria-hidden="true" /> Low cloud cover preferred when available
-            </p>
+            <p className="text-[10px] text-slate-600">Sentinel-2 L2A true color · lower-cloud scenes preferred</p>
           </div>
           <p className="mt-3 text-[10px] leading-4 text-slate-600">
-            Provider imagery can be unavailable, delayed, too cloudy, or missing a quicklook. Manual upload remains available below.
+            Scene cloud cover is a product-level estimate. Individual road or building damage is not certain; human verification is required.
           </p>
           {fetchMessage && <p className="mt-3 text-xs leading-5 text-emerald-300" role="status">{fetchMessage}</p>}
           {fetchError && <p className="mt-3 text-xs leading-5 text-amber-300" role="alert">{fetchError}</p>}
         </section>
 
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-white">
-              {imagery.source === "satellite" ? "Selected satellite imagery" : "Manual imagery fallback"}
-            </h2>
-            <p className="mt-1 text-xs text-slate-500">
-              {imagery.source === "satellite"
-                ? "This metadata pair is active. Direct damage-analysis transport still requires local files."
-                : "Upload local Before and After files when satellite imagery is unsuitable or unavailable."}
-            </p>
-          </div>
-          {imagery.source === "satellite" && (
-            <button type="button" className="area-secondary-button" onClick={useManualImagery}>
-              <Upload className="size-4" aria-hidden="true" /> Use manual imagery instead
-            </button>
-          )}
-        </div>
+        {pendingSatellite && (
+          <section className="mb-5 rounded-xl border border-amber-400/25 bg-amber-400/[0.05] p-4 sm:p-5" aria-labelledby="higher-cloud-heading">
+            <div className="mb-4">
+              <h2 id="higher-cloud-heading" className="text-sm font-semibold text-amber-200">Higher cloud cover — verification limited.</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-400">
+                No scene met the 40% cloud limit for at least one target date. Review this optional pair before using it for analysis.
+              </p>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ImageUploadPanel id="before-cloud-option" title="Optional Before imagery" description="Best available scene within 14 days of the requested Before date." image={pendingSatellite.beforeImage} satelliteReadOnly onProviderFailure={() => setShowManualUpload(true)} onImageChange={() => undefined} />
+              <ImageUploadPanel id="after-cloud-option" title="Optional After imagery" description="Best available scene within 14 days of the requested After date." image={pendingSatellite.afterImage} satelliteReadOnly onProviderFailure={() => setShowManualUpload(true)} onImageChange={() => undefined} />
+            </div>
+            {(beforeCandidates.length > 1 || afterCandidates.length > 1) && (
+              <div className="mt-4 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-4 sm:grid-cols-2">
+                <SceneChoice
+                  label="Choose another Before scene"
+                  value={pendingSatellite.beforeImage.id}
+                  options={beforeCandidates.filter((candidate) => isValidComparisonPair(candidate, pendingSatellite.afterImage))}
+                  onChange={(beforeImage) => setPendingSatellite({ beforeImage, afterImage: pendingSatellite.afterImage })}
+                />
+                <SceneChoice
+                  label="Choose another After scene"
+                  value={pendingSatellite.afterImage.id}
+                  options={afterCandidates.filter((candidate) => isValidComparisonPair(pendingSatellite.beforeImage, candidate))}
+                  onChange={(afterImage) => setPendingSatellite({ beforeImage: pendingSatellite.beforeImage, afterImage })}
+                />
+              </div>
+            )}
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                className="area-primary-button"
+                onClick={() => {
+                  onImageryChange({ ...imagery, satellite: pendingSatellite })
+                  setPendingSatellite(null)
+                  setFetchMessage("Higher-cloud Sentinel-2 imagery selected. Human verification is required.")
+                }}
+              >
+                Use this imagery pair
+              </button>
+              <button type="button" className="area-secondary-button" onClick={() => setPendingSatellite(null)}>
+                Decline imagery
+              </button>
+            </div>
+          </section>
+        )}
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <ImageUploadPanel
-            id="before-disaster-image"
-            title="Before disaster"
-            description={imagery.source === "satellite" ? "Satellite scene captured before the disaster." : "Upload an image showing this area before the disaster."}
-            image={imagery.beforeImage}
-            satelliteReadOnly={imagery.source === "satellite"}
-            onImageChange={(beforeImage) => updateManualImage("before", beforeImage)}
-          />
-          <ImageUploadPanel
-            id="after-disaster-image"
-            title="After disaster"
-            description={imagery.source === "satellite" ? "Satellite scene captured after the disaster." : "Upload an image showing this area after the disaster."}
-            image={imagery.afterImage}
-            satelliteReadOnly={imagery.source === "satellite"}
-            onImageChange={(afterImage) => updateManualImage("after", afterImage)}
-          />
-        </div>
+        {imagery.satellite && (
+          <section className="mb-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-white">Sentinel-2 imagery</h2>
+              <span className="live-badge">Analysis ready</span>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ImageUploadPanel id="before-context-image" title="Before imagery" description="Selected Sentinel-2 scene before the requested date." image={imagery.satellite.beforeImage} satelliteReadOnly onProviderFailure={() => setShowManualUpload(true)} onImageChange={() => undefined} />
+              <ImageUploadPanel id="after-context-image" title="After imagery" description="Selected Sentinel-2 scene after the requested date." image={imagery.satellite.afterImage} satelliteReadOnly onProviderFailure={() => setShowManualUpload(true)} onImageChange={() => undefined} />
+            </div>
+            {(beforeCandidates.length > 1 || afterCandidates.length > 1) && (
+              <div className="mt-4 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-4 sm:grid-cols-2">
+                <SceneChoice
+                  label="Choose another Before scene"
+                  value={imagery.satellite.beforeImage.id}
+                  options={beforeCandidates.filter((candidate) => isValidComparisonPair(candidate, imagery.satellite!.afterImage))}
+                  onChange={(beforeImage) => onImageryChange({ ...imagery, satellite: { beforeImage, afterImage: imagery.satellite!.afterImage } })}
+                />
+                <SceneChoice
+                  label="Choose another After scene"
+                  value={imagery.satellite.afterImage.id}
+                  options={afterCandidates.filter((candidate) => isValidComparisonPair(imagery.satellite!.beforeImage, candidate))}
+                  onChange={(afterImage) => onImageryChange({ ...imagery, satellite: { beforeImage: imagery.satellite!.beforeImage, afterImage } })}
+                />
+              </div>
+            )}
+            {!showManualUpload && (
+              <button type="button" className="area-secondary-button mt-4" onClick={() => setShowManualUpload(true)}>
+                Use manual upload instead
+              </button>
+            )}
+          </section>
+        )}
+
+        {showManualUpload && <section className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] p-4 sm:p-5">
+          <div className="mb-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Upload className="size-4 text-amber-300" aria-hidden="true" />
+              <h2 className="text-sm font-semibold text-white">Upload high-resolution imagery for detailed damage analysis.</h2>
+              {manualPairReady && <span className="status-pill status-safe">Ready</span>}
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-400">Upload matching aerial, drone, or high-resolution satellite images. These files stay in this browser session.</p>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ImageUploadPanel id="before-disaster-image" title="Before disaster" description="High-resolution uploaded imagery from before the event." image={imagery.manual.beforeImage} onImageChange={(beforeImage) => updateManualImage("before", beforeImage)} />
+            <ImageUploadPanel id="after-disaster-image" title="After disaster" description="High-resolution uploaded imagery from after the event." image={imagery.manual.afterImage} onImageChange={(afterImage) => updateManualImage("after", afterImage)} />
+          </div>
+          {manualPairReady && <p className="mt-3 text-xs font-medium text-emerald-300">High-resolution uploaded imagery.</p>}
+        </section>}
 
         <div className="mt-6 flex flex-col-reverse gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:items-center sm:justify-between">
           <button type="button" className="area-secondary-button" onClick={onBack}>
             <ArrowLeft className="size-4" aria-hidden="true" /> Back to area
           </button>
           <button type="button" className="area-primary-button" disabled={!canContinue} onClick={onContinue}>
-            Continue to analysis <ArrowRight className="size-4" aria-hidden="true" />
+            {imagery.satellite || manualPairReady ? "Continue to analysis" : "Continue without comparison"} <ArrowRight className="size-4" aria-hidden="true" />
           </button>
         </div>
       </div>
     </motion.main>
+  )
+}
+
+function SceneChoice({ label, value, options, onChange }: {
+  label: string
+  value: string
+  options: SatelliteImageMetadata[]
+  onChange: (image: SatelliteImageMetadata) => void
+}) {
+  if (options.length < 2) return null
+  return (
+    <label className="space-y-2 text-[10px] uppercase tracking-wider text-slate-500">
+      {label}
+      <select
+        className="field-control block w-full normal-case tracking-normal"
+        value={value}
+        onChange={(event) => {
+          const selected = options.find((option) => option.id === event.target.value)
+          if (selected) onChange(selected)
+        }}
+      >
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.captureDate.slice(0, 10)} · {option.cloudCoverage.toFixed(1)}% cloud · {option.id}
+          </option>
+        ))}
+      </select>
+    </label>
   )
 }

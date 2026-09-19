@@ -14,6 +14,14 @@ const nextConfig: NextConfig = {
         destination: `${normalizedBackendUrl}/api/satellite-imagery`,
       },
       {
+        source: "/api/satellite-imagery/preview/:path*",
+        destination: `${normalizedBackendUrl}/api/satellite-imagery/preview/:path*`,
+      },
+      {
+        source: "/api/analyze-damage/satellite",
+        destination: `${normalizedBackendUrl}/analyze-damage/satellite`,
+      },
+      {
         source: "/api/analyze-damage",
         destination: `${normalizedBackendUrl}/analyze-damage`,
       },

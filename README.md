@@ -257,14 +257,31 @@ no CORS configuration is needed. Interactive API documentation: <http://127.0.0.
 {
   "startingPoint": "blacksburg-fire-station",
   "destination": "lewisgale-hospital",
-  "responderType": "ambulance"
+  "responderType": "ambulance",
+  "selectedArea": {
+    "west": -80.45,
+    "south": 37.20,
+    "east": -80.40,
+    "north": 37.25
+  },
+  "detectedHazards": [
+    {
+      "id": "demo-flood",
+      "name": "Potential Flooded Road Segment",
+      "type": "flooding",
+      "severity": "HIGH",
+      "confidence": 88,
+      "affectedInfrastructure": ["Primary road access"]
+    }
+  ]
 }
 ```
 
 - `startingPoint`: `blacksburg-fire-station` or `virginia-tech-rescue`.
 - `destination`: `lewisgale-hospital` or `blacksburg-shelter`.
 - `responderType`: `civilian`, `ambulance`, `firefighter`, `supply-vehicle`, or `emergency-coordinator`.
-- All fields are required. Arbitrary addresses/coordinates, unsupported values,
+- The first three fields are required. `selectedArea` and `detectedHazards` are optional
+  demo-analysis context from the four-step imagery workflow. Arbitrary addresses/coordinates, unsupported values,
   missing fields, extra fields, and malformed JSON return HTTP `422` with FastAPI's `detail` array.
 
 HTTP `200` returns:
@@ -272,6 +289,7 @@ HTTP `200` returns:
 | Field | Contract |
 | --- | --- |
 | `startingPoint`, `destination`, `responderType` | Echo the validated request. |
+| `selectedArea`, `detectedHazards` | Optional validated demo-analysis context echoed from the request. |
 | `dataSource` | Always `"mock"`. |
 | `recommendation` | Role-specific mock result containing `routeName`, `recommendedDestination`, `travelTime`, `distance`, `risk`, `confidence`, `priority`, `hazardsAvoided`, a concise `explanation`, and one rejected `alternative` with its risk and rejection reason. |
 | `route` | Existing `Route`: `id`, `name`, `kind` (`"safe"` in this demo), and role-specific mock `coordinates` as `[longitude, latitude]` pairs. |
@@ -294,36 +312,75 @@ No road-network routing, live hazard analysis, LLM inference, or dispatch is per
 Human verification is required before operational use. Request failures are shown
 in the results panel with a retry instruction; there is no silent local-result fallback.
 
+After a successful imagery transport receipt, the frontend creates a clearly labeled,
+deterministic demo damage-analysis result for the confirmed bounds. Step 4 reuses the
+existing route dashboard and API, displays the potential hazards, and passes their
+names and selected bounds into the mock route explanation. This is not computer-vision
+damage detection.
+
 Run backend checks from `backend/` with `python -m unittest -v`.
 
-### Satellite Imagery Metadata
+### Copernicus Sentinel-2 Imagery
 
 After confirming a disaster-area rectangle, the imagery step can request before/after
-satellite metadata for the exact bounding box through `POST /api/satellite-imagery`.
-The browser sends coordinates in `[minLng, minLat, maxLng, maxLat]` order and may
-include optional `beforeDate` and `afterDate` values. Manual PNG, JPG, and WEBP
-uploads remain available if provider imagery is missing, delayed, too cloudy, or
-does not include a displayable quicklook.
+satellite imagery for the exact bounding box through `POST /api/satellite-imagery`.
+The browser sends coordinates in `[minLng, minLat, maxLng, maxLat]` order with
+`beforeDate` and `afterDate`. The backend uses the Copernicus Sentinel Hub
+STAC-compatible Catalog API to find Sentinel-2 L2A scenes within a configurable
+plus/minus 14-day window around each target date. It selects the lowest-cloud scene,
+using distance from the target date as the tie-breaker, and renders true-color
+previews with the Process API.
 
-The backend defaults to deterministic mock metadata and requires no credentials.
-To enable the Copernicus adapter:
+Before and After selection is sequential. The Before capture must precede the After
+target date; the After capture must occur on or after that target. The provider excludes
+the chosen Before product ID and capture timestamp from After candidates. A comparison
+also requires distinct products at least 24 hours apart. When these rules cannot produce
+a complete pair, the API reports **comparison unavailable** instead of duplicating an
+image. Route planning remains available for the selected bounds with clearly labeled
+mock hazards.
 
-1. Copy `backend/.env.example` to `backend/.env`.
-2. Set `SATELLITE_IMAGERY_PROVIDER=copernicus`.
-3. Add the server-side `COPERNICUS_CLIENT_ID` and `COPERNICUS_CLIENT_SECRET` from
-   a Copernicus Data Space OAuth client.
-4. Restart FastAPI. Keep `backend/.env` local; it is ignored by Git.
+Create a free Copernicus Data Space account and OAuth client. Copy
+`backend/.env.example` to `backend/.env`, then set `COPERNICUS_CLIENT_ID` and
+`COPERNICUS_CLIENT_SECRET`. Credentials remain in FastAPI and must never use a
+`NEXT_PUBLIC_` variable. `COPERNICUS_MAX_CLOUD_COVER` defaults to 40 percent and
+`COPERNICUS_SEARCH_WINDOW_DAYS` defaults to 14.
+Set `SATELLITE_IMAGERY_PROVIDER=mock` to skip network requests and exercise the
+manual-upload fallback.
 
-The adapter authenticates on the backend, searches the Copernicus Sentinel Hub
-STAC catalog for Sentinel-2 L2A items intersecting the selected bounds, separates
-the before and after date windows, and prefers the lowest reported cloud cover.
-It returns metadata and safe HTTPS quicklook links when the catalog provides them;
-it does not download imagery into the repository. If credentials are absent, the
-provider request fails, or a complete pair is unavailable, the endpoint returns a
-typed demo fallback and recommends manual upload. See the official
-[Copernicus Catalog API](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Catalog.html)
-and [OAuth client authentication](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Overview/Authentication.html)
-documentation for provider details.
+Successful searches return the requested date, actual capture time, product cloud
+cover, number of candidate scenes checked, selected bounds, and short-lived
+same-origin preview URLs. Preview bytes are held in backend
+memory for display and are never written to the repository. A complete pair enables
+the detailed **Analyze damage** demo automatically. Missing credentials, unavailable
+scenes, excessive cloud cover, rendering failures, and expired previews show a clear
+message and reveal the existing manual PNG, JPG, and WEBP upload fallback. When no
+scene meets 40% but the best candidate is below 70%, the UI labels it **Higher cloud
+cover — verification limited** and requires the user to accept it before analysis.
+Scenes at 70% cloud cover or above are not offered.
+For usable low-cloud results, the imagery step offers up to three chronological
+candidates per side through **Choose another scene** controls. Every choice displays
+its requested date, actual capture time, scene ID, and cloud cover, and the frontend
+rechecks pair eligibility before enabling detailed comparison.
+
+Sentinel-2 provides higher-resolution local-area context than the previous wide-area
+provider, but this MVP still creates deterministic mock findings rather than running
+computer vision. It does not claim that individual road or building damage is certain;
+human verification is required. See the
+[Copernicus Sentinel Hub Catalog API](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Catalog.html),
+[Sentinel-2 L2A documentation](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S2L2A.html),
+and [authentication guide](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Overview/Authentication.html).
+
+Copernicus attribution: Sentinel-2 imagery is provided through the Copernicus Data
+Space Ecosystem.
+
+After Analyze damage succeeds, the session-scoped demo analysis result retains the
+exact Before and After Sentinel-2 preview URLs, capture times, cloud cover, layer,
+source, and selected bounds.
+View Evidence actions on hazards, incidents, and completed recommendations reuse the
+existing evidence modal to display that same pair side by side. The application does
+not save those remote images in the repository. If a URL is missing, expired, or fails
+to load, the modal explains the failure and links back to the existing manual upload
+step.
 
 ### Damage Analysis Transport Contract
 
@@ -350,12 +407,23 @@ This endpoint currently verifies multipart transport and request validation
 only. It does not read or persist image bytes, compare imagery, run a model,
 detect damage, generate hazards, or update routes.
 
-Satellite lookup currently returns metadata and optional remote quicklook URLs,
-not image files. Those results can be reviewed in the Analysis step, but they
-cannot be submitted to the multipart endpoint. Select manual imagery to test
-the transport receipt. Direct satellite analysis will require the backend
-provider to retrieve usable Before and After image bytes and pass them into the
-damage-analysis pipeline server-side.
+Sentinel-2 sessions validate the generated preview references through
+`POST /analyze-damage/satellite`; manual files use the multipart endpoint. Both
+paths produce clearly labeled demo findings after transport validation. Neither path
+performs real computer-vision damage detection.
+
+For a validated Sentinel-2 pair, the satellite endpoint now also requests separate
+16-bit analysis GeoTIFFs from the Copernicus Process API. These rasters retain the
+selected CRS84 bounds, scene ID, capture time, RGB band identities, data mask, pixel
+dimensions, and an estimated ground pixel size. The backend verifies that Before and
+After have matching bounds, CRS, dimensions, bands, and sample type, then keeps at
+most four rasters in memory for one hour. `COPERNICUS_ANALYSIS_MAX_DIMENSION` defaults
+to 2048 to bound memory; larger selected areas therefore report a coarser effective
+pixel size instead of claiming native 10 m detail.
+
+This is raster preparation only. The application does not yet tile these GeoTIFFs,
+run RF-DETR, calculate spectral indices, detect hazards, or geolocate detections. The
+frontend's resulting hazards remain explicitly labeled demo data.
 
 ## Stretch Features
 

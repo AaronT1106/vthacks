@@ -87,6 +87,35 @@ export interface Hazard {
   polygon: Coordinates[]
 }
 
+export interface DemoDamageHazard {
+  id: string
+  name: string
+  type: string
+  severity: Severity
+  confidence: number
+  affectedInfrastructure: string[]
+}
+
+export interface DemoDamageAnalysisResult {
+  dataSource: "demo-analysis"
+  analysisMode: "detailed-upload" | "detailed-sentinel" | "wide-area-context"
+  bounds: DisasterAreaBounds
+  imagerySource: "manual" | "Copernicus Sentinel-2" | "selected area only"
+  beforeImage: DamageEvidenceImage
+  afterImage: DamageEvidenceImage
+  hazards: DemoDamageHazard[]
+}
+
+export interface DamageEvidenceImage {
+  source: "Copernicus Sentinel-2" | "Manual upload" | "No comparison imagery"
+  label: string
+  captureDate: string | null
+  imageUrl: string | null
+  imageFile: File | null
+  layerName: string | null
+  cloudCoverage: number | null
+}
+
 export interface Route {
   id: string
   name: string
@@ -116,6 +145,8 @@ export interface RouteAnalysisRequest {
   startingPoint: string
   destination: string
   responderType: ResponderMode
+  selectedArea?: DisasterAreaBounds
+  detectedHazards?: DemoDamageHazard[]
 }
 
 export interface RouteAnalysisResponse extends RouteAnalysisRequest {

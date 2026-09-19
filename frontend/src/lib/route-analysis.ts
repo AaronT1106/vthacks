@@ -1,5 +1,7 @@
 import type {
   ResponderMode,
+  DemoDamageHazard,
+  DisasterAreaBounds,
   RouteAnalysisRequest,
   RouteAnalysisResponse,
   RouteRecommendation,
@@ -117,11 +119,15 @@ export async function analyzeCoordinateRoute({
   startingPlace,
   destinationPlace,
   responderType,
+  selectedArea,
+  detectedHazards,
   signal,
 }: {
   startingPlace: SelectedPlace
   destinationPlace: SelectedPlace
   responderType: ResponderMode
+  selectedArea?: DisasterAreaBounds
+  detectedHazards?: DemoDamageHazard[]
   signal: AbortSignal
 }): Promise<RouteAnalysisResponse> {
   await new Promise<void>((resolve, reject) => {
@@ -135,6 +141,10 @@ export async function analyzeCoordinateRoute({
   const profile = coordinateRouteProfiles[responderType]
   const midpointLongitude = (startingPlace.longitude + destinationPlace.longitude) / 2
   const midpointLatitude = (startingPlace.latitude + destinationPlace.latitude) / 2
+  const selectedHazardNames = detectedHazards?.map((hazard) => hazard.name) ?? []
+  const selectedAreaExplanation = selectedArea && selectedHazardNames.length > 0
+    ? ` It avoids the demo hazards detected in the selected area (${selectedArea.west.toFixed(4)}, ${selectedArea.south.toFixed(4)} to ${selectedArea.east.toFixed(4)}, ${selectedArea.north.toFixed(4)}): ${selectedHazardNames.join(", ")}.`
+    : ""
 
   return {
     startingPoint: startingPlace.presetId ?? "selected-mapbox-start",
@@ -150,8 +160,10 @@ export async function analyzeCoordinateRoute({
       risk: profile.risk,
       confidence: profile.confidence,
       priority: profile.priority,
-      explanation: `${profile.explanation} This frontend-only route uses mock coordinates and requires human verification.`,
-      hazardsAvoided: ["Simulated flood zone", "Simulated damaged bridge"],
+      explanation: `${profile.explanation}${selectedAreaExplanation} This frontend-only route uses mock coordinates and requires human verification.`,
+      hazardsAvoided: selectedHazardNames.length > 0
+        ? selectedHazardNames
+        : ["Simulated flood zone", "Simulated damaged bridge"],
       alternative: {
         routeName: "Direct Hazard Corridor",
         risk: "HIGH",

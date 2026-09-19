@@ -5,8 +5,8 @@ import { AnimatePresence, motion } from "framer-motion"
 import {
   Activity,
   AlertOctagon,
+  ArrowLeft,
   ArrowRight,
-  ChevronRight,
   CircleDot,
   Map as MapIcon,
   Radar,
@@ -26,7 +26,7 @@ import { ResponderModeSelector } from "@/src/components/responder-mode-selector"
 import { RouteRecommendationPanel } from "@/src/components/route-recommendation-panel"
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
 import { WhatChangedFeed } from "@/src/components/what-changed-feed"
-import type { WorkflowStep } from "@/src/components/workflow-progress"
+import { WorkflowProgress, type WorkflowStep } from "@/src/components/workflow-progress"
 import { analyzeCoordinateRoute, analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
@@ -40,6 +40,8 @@ import {
   type ChangeEvent,
   type Coordinates,
   type DestinationType,
+  type DemoDamageAnalysisResult,
+  type DemoDamageHazard,
   type DisasterAreaBounds,
   type Hazard,
   type MapLayerVisibility,
@@ -81,10 +83,10 @@ export function DisasterDashboard() {
   const [disasterAreaBounds, setDisasterAreaBounds] = useState<DisasterAreaBounds | null>(null)
   const [disasterAreaPlace, setDisasterAreaPlace] = useState<SelectedPlace | null>(null)
   const [disasterImagery, setDisasterImagery] = useState<DisasterImagery>({
-    source: null,
-    beforeImage: null,
-    afterImage: null,
+    satellite: null,
+    manual: { beforeImage: null, afterImage: null },
   })
+  const [damageAnalysisResult, setDamageAnalysisResult] = useState<DemoDamageAnalysisResult | null>(null)
   const [pendingAreaChange, setPendingAreaChange] = useState<PendingAreaChange | null>(null)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
   const [startingPlace, setStartingPlace] = useState<SelectedPlace | null>(() =>
@@ -97,14 +99,16 @@ export function DisasterDashboard() {
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle")
   const [hazardRecords, setHazardRecords] = useState<Hazard[]>(hazards)
   const [selectedHazardId, setSelectedHazardId] = useState(hazards[0].id)
-  const [evidenceHazardId, setEvidenceHazardId] = useState<string | null>(null)
+  const [evidenceSelection, setEvidenceSelection] = useState<{ kind: "record" | "demo"; id: string } | null>(null)
   const [mapLayers, setMapLayers] = useState<MapLayerVisibility>(defaultMapLayers)
   const [changeEvents, setChangeEvents] = useState<ChangeEvent[]>(initialChangeEvents)
   const [analysisResult, setAnalysisResult] = useState<RouteAnalysisResponse | null>(null)
   const [analysisError, setAnalysisError] = useState("")
   const activeRequest = useRef<AbortController | null>(null)
   const selectedHazard = hazardRecords.find((hazard) => hazard.id === selectedHazardId) ?? hazardRecords[0]
-  const evidenceHazard = hazardRecords.find((hazard) => hazard.id === evidenceHazardId) ?? null
+  const evidenceHazard: Hazard | DemoDamageHazard | null = evidenceSelection?.kind === "demo"
+    ? damageAnalysisResult?.hazards.find((hazard) => hazard.id === evidenceSelection.id) ?? null
+    : hazardRecords.find((hazard) => hazard.id === evidenceSelection?.id) ?? null
 
   const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
   const displayedDestinationPlace: SelectedPlace | null = analysisResult && recommendedEndpoint
@@ -144,11 +148,21 @@ export function DisasterDashboard() {
     setSelectedHazardId(hazard.id)
   }, [])
 
-  const closeEvidence = useCallback(() => setEvidenceHazardId(null), [])
+  const closeEvidence = useCallback(() => setEvidenceSelection(null), [])
 
   function viewHazardEvidence(hazard: Hazard) {
     setSelectedHazardId(hazard.id)
-    setEvidenceHazardId(hazard.id)
+    setEvidenceSelection({ kind: "record", id: hazard.id })
+  }
+
+  function viewDemoHazardEvidence(hazard: DemoDamageHazard) {
+    setEvidenceSelection({ kind: "demo", id: hazard.id })
+  }
+
+  function viewRecommendationEvidence() {
+    const demoHazard = damageAnalysisResult?.hazards[0]
+    if (demoHazard) viewDemoHazardEvidence(demoHazard)
+    else viewHazardEvidence(selectedHazard)
   }
 
   function updateHazardVerification(hazardId: string, verification: string) {
@@ -212,13 +226,18 @@ export function DisasterDashboard() {
   function commitArea(bounds: DisasterAreaBounds, place: SelectedPlace | null) {
     setDisasterAreaBounds(bounds)
     setDisasterAreaPlace(place)
+    setDamageAnalysisResult(null)
     setWorkflowStep("imagery")
   }
 
   function handleAreaConfirmation(bounds: DisasterAreaBounds, place: SelectedPlace | null) {
     if (!(bounds.east > bounds.west && bounds.north > bounds.south)) return
     const changed = disasterAreaBounds ? boundsMateriallyChanged(disasterAreaBounds, bounds) : false
-    const hasImagery = Boolean(disasterImagery.beforeImage || disasterImagery.afterImage)
+    const hasImagery = Boolean(
+      disasterImagery.satellite
+      || disasterImagery.manual.beforeImage
+      || disasterImagery.manual.afterImage,
+    )
     if (changed && hasImagery) {
       setPendingAreaChange({ bounds, place })
       return
@@ -240,11 +259,17 @@ export function DisasterDashboard() {
             startingPoint: startingPlace.presetId!,
             destination: destinationPlace.presetId!,
             responderType: responderMode,
+            ...(damageAnalysisResult ? {
+              selectedArea: damageAnalysisResult.bounds,
+              detectedHazards: damageAnalysisResult.hazards,
+            } : {}),
           }, controller.signal)
         : await analyzeCoordinateRoute({
             startingPlace,
             destinationPlace,
             responderType: responderMode,
+            selectedArea: damageAnalysisResult?.bounds,
+            detectedHazards: damageAnalysisResult?.hazards,
             signal: controller.signal,
           })
       if (activeRequest.current !== controller) return
@@ -307,8 +332,6 @@ export function DisasterDashboard() {
             if (
               disasterAreaBounds.east > disasterAreaBounds.west
               && disasterAreaBounds.north > disasterAreaBounds.south
-              && disasterImagery.beforeImage
-              && disasterImagery.afterImage
             ) setWorkflowStep("analysis")
           }}
         />
@@ -320,6 +343,11 @@ export function DisasterDashboard() {
           place={disasterAreaPlace}
           imagery={disasterImagery}
           onBack={() => setWorkflowStep("imagery")}
+          onComplete={(result) => {
+            setDamageAnalysisResult(result)
+            resetAnalysis()
+            setWorkflowStep("route")
+          }}
         />
       )}
 
@@ -340,11 +368,7 @@ export function DisasterDashboard() {
             </div>
           </div>
 
-          <div className="hidden min-w-0 items-center gap-2 text-center md:flex">
-            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-600">Current incident</span>
-            <ChevronRight className="size-3 text-slate-700" />
-            <span className="truncate text-xs font-medium text-slate-200">{incident.name}</span>
-          </div>
+          <WorkflowProgress currentStep="route" />
 
           <div className="flex shrink-0 items-center gap-3">
             <span className="live-badge"><span className="live-dot" />Live</span>
@@ -355,6 +379,36 @@ export function DisasterDashboard() {
         <div className="grid min-h-0 flex-1 grid-cols-1 xl:h-[calc(100vh-3.5rem)] xl:grid-cols-[280px_minmax(420px,1fr)_340px]">
           <aside className="order-1 border-b border-white/[0.07] bg-[#080c13] xl:overflow-y-auto xl:border-b-0 xl:border-r">
             <div className="p-4">
+              {damageAnalysisResult && (
+                <section className="mb-5 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-3" aria-labelledby="selected-area-route-heading">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 id="selected-area-route-heading" className="text-xs font-semibold text-white">Selected area</h2>
+                    <span className="mock-badge">
+                      {damageAnalysisResult.analysisMode === "wide-area-context" ? "Wide-area mock" : "Detailed demo"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[11px] text-slate-400">{disasterAreaPlace?.name ?? "Custom bounding box"}</p>
+                  <p className="mt-1 break-words font-mono text-[9px] leading-4 text-slate-600">
+                    [{damageAnalysisResult.bounds.west.toFixed(5)}, {damageAnalysisResult.bounds.south.toFixed(5)}, {damageAnalysisResult.bounds.east.toFixed(5)}, {damageAnalysisResult.bounds.north.toFixed(5)}]
+                  </p>
+                  <p className="mt-3 text-[10px] uppercase tracking-wider text-slate-600">Detected hazards</p>
+                  <ul className="mt-2 space-y-2">
+                    {damageAnalysisResult.hazards.map((hazard) => (
+                      <li key={hazard.id} className="rounded-lg border border-white/[0.06] bg-black/10 p-2">
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-medium text-slate-200">{hazard.name}</span>
+                          <span className="text-amber-300">{hazard.severity}</span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-500">{hazard.confidence}% confidence · {hazard.affectedInfrastructure.join(", ")}</p>
+                        <button type="button" className="mt-2 text-[10px] font-medium text-cyan-300 hover:text-cyan-200" onClick={() => viewDemoHazardEvidence(hazard)}>View Evidence</button>
+                      </li>
+                    ))}
+                  </ul>
+                  <button type="button" className="area-secondary-button mt-3 w-full justify-center" onClick={() => setWorkflowStep("analysis")}>
+                    <ArrowLeft className="size-4" aria-hidden="true" /> Back to Analysis
+                  </button>
+                </section>
+              )}
               <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-400">Live operations</p>
               <nav aria-label="Primary navigation" className="mb-5 grid grid-cols-3 gap-1 xl:grid-cols-1">
                 <NavItem
@@ -533,6 +587,7 @@ export function DisasterDashboard() {
                       status={analysisStatus}
                       recommendation={analysisResult?.recommendation ?? null}
                       error={analysisError}
+                      onViewEvidence={viewRecommendationEvidence}
                     />
                   ) : (
                     <div className="grid gap-4 lg:grid-cols-2">
@@ -554,7 +609,7 @@ export function DisasterDashboard() {
             <div className="space-y-3 p-3">
               {activeTab === "situation-map" && (
                 <>
-                  <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} />
+                  <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} onViewEvidence={viewRecommendationEvidence} />
                   <DamageDetailsPanel hazard={selectedHazard} onViewEvidence={viewHazardEvidence} />
                 </>
               )}
@@ -571,9 +626,14 @@ export function DisasterDashboard() {
       {evidenceHazard && (
         <HazardEvidencePanel
           hazard={evidenceHazard}
+          analysisResult={damageAnalysisResult}
           onClose={closeEvidence}
-          onConfirm={(hazardId) => updateHazardVerification(hazardId, "Confirmed by operator (Mock demo)")}
-          onMarkFalsePositive={(hazardId) => updateHazardVerification(hazardId, "False positive marked by operator (Mock demo)")}
+          onConfirm={"affected" in evidenceHazard ? (hazardId) => updateHazardVerification(hazardId, "Confirmed by operator (Mock demo)") : undefined}
+          onMarkFalsePositive={"affected" in evidenceHazard ? (hazardId) => updateHazardVerification(hazardId, "False positive marked by operator (Mock demo)") : undefined}
+          onUseManualImagery={() => {
+            closeEvidence()
+            setWorkflowStep("imagery")
+          }}
         />
       )}
 
@@ -598,7 +658,10 @@ export function DisasterDashboard() {
                 onClick={() => {
                   const nextArea = pendingAreaChange
                   setPendingAreaChange(null)
-                  setDisasterImagery({ source: null, beforeImage: null, afterImage: null })
+                  setDisasterImagery({
+                    satellite: null,
+                    manual: { beforeImage: null, afterImage: null },
+                  })
                   commitArea(nextArea.bounds, nextArea.place)
                 }}
               >
