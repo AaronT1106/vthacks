@@ -149,6 +149,14 @@ input:focus-visible {
   .map-recenter-button {
     @apply absolute right-4 top-4 z-10 grid size-9 place-items-center rounded-lg border border-white/10 bg-[#07101b]/90 text-slate-300 shadow-lg backdrop-blur transition-colors hover:bg-[#111b29] hover:text-cyan-300;
   }
+
+  .place-results-dropdown {
+    @apply absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-64 overflow-y-auto rounded-lg border border-slate-700 bg-[#0c111b] py-1 shadow-2xl shadow-black/40;
+  }
+
+  .place-result {
+    @apply flex w-full items-start gap-2 border-b border-slate-800/70 px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-white/[0.04];
+  }
 }
 
 .analysis-spinner,
@@ -239,6 +247,45 @@ input:focus-visible {
 .mapboxgl-ctrl-attrib {
   background: rgb(7 16 27 / 0.75) !important;
   color: #64748b !important;
+}
+
+.disaster-map-popup .mapboxgl-popup-content {
+  min-width: 190px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 10px;
+  background: #0c111b;
+  padding: 12px;
+  color: #e2e8f0;
+  box-shadow: 0 14px 38px rgb(0 0 0 / 0.35);
+}
+
+.disaster-map-popup .mapboxgl-popup-tip {
+  border-top-color: #0c111b;
+  border-bottom-color: #0c111b;
+}
+
+.map-place-popup-role {
+  margin: 0 0 5px;
+  color: #22d3ee;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.map-place-popup-name {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.map-place-popup-address {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 @keyframes spin {
