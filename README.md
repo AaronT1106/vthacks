@@ -242,7 +242,9 @@ python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The frontend proxies `/api/analyze-route` to `http://127.0.0.1:8000`.
+The frontend proxies `/api/analyze-route`, `/api/satellite-imagery`, and
+`/api/analyze-damage` to
+`http://127.0.0.1:8000`.
 For a different backend address, set `BACKEND_URL` in the frontend server's environment
 before starting/building Next.js. Browser requests use the same frontend origin;
 no CORS configuration is needed. Interactive API documentation: <http://127.0.0.1:8000/docs>.
@@ -322,6 +324,38 @@ typed demo fallback and recommends manual upload. See the official
 [Copernicus Catalog API](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Catalog.html)
 and [OAuth client authentication](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Overview/Authentication.html)
 documentation for provider details.
+
+### Damage Analysis Transport Contract
+
+`POST /analyze-damage` accepts `multipart/form-data` containing:
+
+| Field | Type |
+| --- | --- |
+| `before_image` | PNG, JPEG, or WEBP file |
+| `after_image` | PNG, JPEG, or WEBP file |
+| `west` | float |
+| `south` | float |
+| `east` | float |
+| `north` | float |
+
+Bounds are valid when `east > west` and `north > south`; negative coordinates
+are supported. Invalid normalized bounds and unsupported image content types
+return HTTP `400`. The frontend sends the request to `/api/analyze-damage`, and
+the existing Next.js proxy forwards it to the FastAPI `/analyze-damage` endpoint
+using the server-side `BACKEND_URL` setting.
+
+HTTP `200` returns a receipt containing `status: "received"`, a message, both
+filenames and content types, and the validated west/south/east/north bounds.
+This endpoint currently verifies multipart transport and request validation
+only. It does not read or persist image bytes, compare imagery, run a model,
+detect damage, generate hazards, or update routes.
+
+Satellite lookup currently returns metadata and optional remote quicklook URLs,
+not image files. Those results can be reviewed in the Analysis step, but they
+cannot be submitted to the multipart endpoint. Select manual imagery to test
+the transport receipt. Direct satellite analysis will require the backend
+provider to retrieve usable Before and After image bytes and pass them into the
+damage-analysis pipeline server-side.
 
 ## Stretch Features
 

@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
         source: "/api/satellite-imagery",
         destination: `${normalizedBackendUrl}/api/satellite-imagery`,
       },
+      {
+        source: "/api/analyze-damage",
+        destination: `${normalizedBackendUrl}/analyze-damage`,
+      },
     ];
   },
 };

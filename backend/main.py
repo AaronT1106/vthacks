@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
@@ -96,7 +96,64 @@ class SatelliteImageryResponse(BaseModel):
     manualUploadRecommended: bool
 
 
+class DamageAnalysisBoundsResponse(BaseModel):
+    west: float
+    south: float
+    east: float
+    north: float
+
+
+class AnalyzeDamageReceiptResponse(BaseModel):
+    status: Literal["received"] = "received"
+    message: str
+    before_filename: str
+    after_filename: str
+    before_content_type: str
+    after_content_type: str
+    bounds: DamageAnalysisBoundsResponse
+
+
 app = FastAPI(title="DisasterLens Mock Route API", version="0.1.0")
+
+ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
+
+
+@app.post("/analyze-damage", response_model=AnalyzeDamageReceiptResponse)
+async def analyze_damage(
+    before_image: UploadFile = File(...),
+    after_image: UploadFile = File(...),
+    west: float = Form(...),
+    south: float = Form(...),
+    east: float = Form(...),
+    north: float = Form(...),
+) -> AnalyzeDamageReceiptResponse:
+    """Validate imagery metadata and confirmed bounds without reading or storing file bytes."""
+    try:
+        if not (east > west and north > south):
+            raise HTTPException(status_code=400, detail="Invalid disaster-area bounds.")
+        if before_image.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported Before image type.")
+        if after_image.content_type not in ALLOWED_IMAGE_CONTENT_TYPES:
+            raise HTTPException(status_code=400, detail="Unsupported After image type.")
+
+        return AnalyzeDamageReceiptResponse(
+            message="Imagery received successfully.",
+            before_filename=before_image.filename or "unnamed-before-image",
+            after_filename=after_image.filename or "unnamed-after-image",
+            before_content_type=before_image.content_type,
+            after_content_type=after_image.content_type,
+            bounds=DamageAnalysisBoundsResponse(
+                west=west,
+                south=south,
+                east=east,
+                north=north,
+            ),
+        )
+    finally:
+        try:
+            await before_image.close()
+        finally:
+            await after_image.close()
 
 
 @app.post("/api/analyze-route", response_model=RouteAnalysisResponse)

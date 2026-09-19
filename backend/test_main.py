@@ -1,12 +1,16 @@
 """Run with: python -m unittest -v (from backend/)."""
 
+import asyncio
+from io import BytesIO
 import unittest
 from datetime import date, datetime
 from unittest.mock import patch
 
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
-from main import app
+from main import analyze_damage, app
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
 
 
@@ -217,6 +221,134 @@ class RouteAnalysisTests(unittest.TestCase):
         for request in invalid_requests:
             with self.subTest(request=request):
                 self.assertEqual(self.client.post("/api/satellite-imagery", json=request).status_code, 422)
+
+
+class DamageAnalysisTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        self.bounds = {
+            "west": "-80.45",
+            "south": "37.20",
+            "east": "-80.40",
+            "north": "37.25",
+        }
+
+    def files(self, before_type="image/jpeg", after_type="image/jpeg"):
+        return {
+            "before_image": ("before.jpg", b"before-metadata-test", before_type),
+            "after_image": ("after.jpg", b"after-metadata-test", after_type),
+        }
+
+    def test_valid_multipart_request_returns_receipt(self):
+        response = self.client.post("/analyze-damage", data=self.bounds, files=self.files())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "status": "received",
+            "message": "Imagery received successfully.",
+            "before_filename": "before.jpg",
+            "after_filename": "after.jpg",
+            "before_content_type": "image/jpeg",
+            "after_content_type": "image/jpeg",
+            "bounds": {
+                "west": -80.45,
+                "south": 37.20,
+                "east": -80.40,
+                "north": 37.25,
+            },
+        })
+
+    def test_negative_coordinates_are_valid_when_normalized(self):
+        response = self.client.post(
+            "/analyze-damage",
+            data={"west": "-70", "south": "-12", "east": "-60", "north": "-10"},
+            files=self.files(before_type="image/png", after_type="image/webp"),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["bounds"], {
+            "west": -70.0,
+            "south": -12.0,
+            "east": -60.0,
+            "north": -10.0,
+        })
+
+    def test_rejects_reversed_or_zero_span_bounds(self):
+        invalid_bounds = [
+            {**self.bounds, "east": self.bounds["west"]},
+            {**self.bounds, "east": "-80.50"},
+            {**self.bounds, "north": self.bounds["south"]},
+            {**self.bounds, "north": "37.10"},
+        ]
+        for bounds in invalid_bounds:
+            with self.subTest(bounds=bounds):
+                response = self.client.post("/analyze-damage", data=bounds, files=self.files())
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json(), {"detail": "Invalid disaster-area bounds."})
+
+    def test_rejects_unsupported_image_types_independently(self):
+        before_response = self.client.post(
+            "/analyze-damage",
+            data=self.bounds,
+            files=self.files(before_type="application/pdf"),
+        )
+        after_response = self.client.post(
+            "/analyze-damage",
+            data=self.bounds,
+            files=self.files(after_type="text/plain"),
+        )
+
+        self.assertEqual(before_response.status_code, 400)
+        self.assertEqual(before_response.json(), {"detail": "Unsupported Before image type."})
+        self.assertEqual(after_response.status_code, 400)
+        self.assertEqual(after_response.json(), {"detail": "Unsupported After image type."})
+
+    def test_missing_invalid_fields_and_wrong_method(self):
+        self.assertEqual(self.client.post("/analyze-damage", data=self.bounds).status_code, 422)
+        self.assertEqual(
+            self.client.post(
+                "/analyze-damage",
+                data={**self.bounds, "west": "not-a-number"},
+                files=self.files(),
+            ).status_code,
+            422,
+        )
+        self.assertEqual(self.client.get("/analyze-damage").status_code, 405)
+
+    def test_upload_handles_close_on_success_and_validation_failures(self):
+        cases = [
+            ("image/jpeg", "image/jpeg", (-80.45, 37.20, -80.40, 37.25), False),
+            ("image/jpeg", "image/jpeg", (-80.40, 37.20, -80.45, 37.25), True),
+            ("application/pdf", "image/jpeg", (-80.45, 37.20, -80.40, 37.25), True),
+            ("image/jpeg", "text/plain", (-80.45, 37.20, -80.40, 37.25), True),
+        ]
+        for before_type, after_type, bounds, raises in cases:
+            with self.subTest(before_type=before_type, after_type=after_type, bounds=bounds):
+                before = UploadFile(
+                    BytesIO(b"before"),
+                    filename="before.jpg",
+                    headers=Headers({"content-type": before_type}),
+                )
+                after = UploadFile(
+                    BytesIO(b"after"),
+                    filename="after.jpg",
+                    headers=Headers({"content-type": after_type}),
+                )
+                request = analyze_damage(
+                    before_image=before,
+                    after_image=after,
+                    west=bounds[0],
+                    south=bounds[1],
+                    east=bounds[2],
+                    north=bounds[3],
+                )
+                if raises:
+                    with self.assertRaises(HTTPException):
+                        asyncio.run(request)
+                else:
+                    asyncio.run(request)
+                self.assertTrue(before.file.closed)
+                self.assertTrue(after.file.closed)
 
 
 if __name__ == "__main__":

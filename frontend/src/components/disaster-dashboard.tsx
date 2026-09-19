@@ -81,6 +81,7 @@ export function DisasterDashboard() {
   const [disasterAreaBounds, setDisasterAreaBounds] = useState<DisasterAreaBounds | null>(null)
   const [disasterAreaPlace, setDisasterAreaPlace] = useState<SelectedPlace | null>(null)
   const [disasterImagery, setDisasterImagery] = useState<DisasterImagery>({
+    source: null,
     beforeImage: null,
     afterImage: null,
   })
@@ -597,7 +598,7 @@ export function DisasterDashboard() {
                 onClick={() => {
                   const nextArea = pendingAreaChange
                   setPendingAreaChange(null)
-                  setDisasterImagery({ beforeImage: null, afterImage: null })
+                  setDisasterImagery({ source: null, beforeImage: null, afterImage: null })
                   commitArea(nextArea.bounds, nextArea.place)
                 }}
               >

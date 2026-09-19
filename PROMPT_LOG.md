@@ -785,6 +785,9 @@ Insert a frontend-only Imagery step after confirmed area selection, retain decod
 - Browser-only upload, drag/drop, preview, modal, Mapbox pointer, and responsive checks remain pending because no connected browser was available.
 - `git diff --check`: passed before this log entry.
 - No backend, dependency manifest, environment, storage, satellite, AI, or route-analysis files were changed.
+
+---
+
 ## Automated Satellite Imagery Metadata Retrieval — 2026-09-19
 
 ### Request
@@ -804,7 +807,6 @@ Add a server-side satellite imagery search for the selected bounding box, popula
 - `backend/test_main.py`
 - `frontend/next.config.ts`
 - `frontend/src/components/disaster-imagery-step.tsx`
-- `PROMPT_LOG.md`
 
 ### Implemented
 
@@ -833,3 +835,86 @@ Add a server-side satellite imagery search for the selected bounding box, popula
 - `git diff --check`: passed before this log entry.
 
 ---
+
+## Analyze Damage Transport Receipt — 2026-09-19
+
+### Request
+
+Connect the existing Analyze damage button to a real multipart FastAPI endpoint that receives the validated Before and After files plus confirmed bounds, validates metadata, and returns a transport receipt without performing damage analysis.
+
+### Files Created
+
+- `frontend/src/lib/damage-analysis.ts`
+
+### Files Modified
+
+- `backend/main.py`
+- `backend/test_main.py`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/next.config.ts`
+- `README.md`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Added `POST /analyze-damage` with multipart fields `before_image`, `after_image`, `west`, `south`, `east`, and `north`.
+- Added independent bounds and content-type validation with concise HTTP 400 details. Negative coordinates are accepted when the box is normalized.
+- The endpoint inspects only filename and content type, never reads image bytes, and closes both `UploadFile` handles through a nested `finally` block on success and every validation failure.
+- Added a focused frontend transport helper that builds `FormData`, uses same-origin `/api/analyze-damage`, parses safe FastAPI errors, and rejects incomplete HTTP 200 receipts.
+- Extended the existing server-only `BACKEND_URL` proxy while preserving `/api/analyze-route`; no public API URL or CORS configuration was added.
+- Enabled the existing Analysis button with local idle/loading/success/error state, the existing 15-second AbortController pattern, duplicate prevention, stale-result protection, timeout/unmount cleanup, retry behavior, and a receipt-only success panel.
+- The UI states explicitly that the backend received metadata and bounds and that no damage analysis occurred.
+
+### Validation
+
+- Backend `python -m unittest -v` in a disposable `/tmp` environment: all 11 route and damage tests passed.
+- Damage tests covered the exact receipt, negative longitude and latitude, reversed/zero-span bounds, independent Before/After type rejection, missing/malformed fields, wrong method, and both upload handles closing on success and all HTTP 400 paths.
+- `python3 -m py_compile main.py test_main.py`: passed.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: reached Next.js but remained blocked by the known Turbopack CSS-worker port-binding restriction (`Operation not permitted`).
+- End-to-end multipart POST through `/api/analyze-damage`: passed and returned the expected receipt.
+- Invalid bounds through the same proxy returned `{"detail":"Invalid disaster-area bounds."}`.
+- Existing `/api/analyze-route` proxy regression check: passed with the normal ambulance response.
+- Frontend development server compiled and served HTTP 200.
+- Browser-only button, loading, retry, and receipt-layout checks remain pending because no connected browser was available.
+- No dependency manifest, environment value, storage, satellite, AI, hazard, Mapbox, imagery-state, or route-analysis implementation was changed.
+
+---
+
+## Satellite and Analyze Damage Rebase Integration — 2026-09-19
+
+### Request
+
+Resolve the active rebase conflicts while preserving satellite imagery metadata retrieval, manual image uploads, Analyze Damage transport, and the existing route workflow.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `backend/main.py`
+- `backend/test_main.py`
+- `frontend/next.config.ts`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-imagery-step.tsx`
+- `frontend/src/lib/damage-analysis.ts`
+
+### Implemented
+
+- Combined the route, satellite-imagery, and Analyze Damage endpoints and all three same-origin frontend rewrites.
+- Preserved both satellite and damage test coverage and both documentation histories.
+- Added an explicit `satellite`, `manual`, or empty active imagery source so provider metadata cannot be passed to the multipart endpoint as a fake file.
+- Kept complete satellite pairs reviewable, while disabling Analyze Damage with accurate guidance until backend-controlled satellite image retrieval exists.
+- Kept manual PNG/JPEG/WEBP pairs as the working transport path and preserved area-change clearing for either source.
+- Completed the interrupted rebase on `main` without skipping or discarding either feature.
+
+### Validation
+
+- Backend `python -m unittest -v`: all 15 route, satellite, and damage tests passed.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: blocked by the existing Turbopack CSS-worker port-binding restriction (`Operation not permitted`), including the approved retry outside the sandbox.
+- `git diff --check`: passed before this log entry.
+- Browser interaction checks remain pending because no connected browser was available.
+- No dependencies, environment values, CORS, fake imagery files, or damage detections were added.

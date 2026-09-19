@@ -7,10 +7,10 @@ import { WorkflowProgress } from "@/src/components/workflow-progress"
 import { fetchSatelliteImagery, type SatelliteImageMetadata } from "@/src/lib/satellite-imagery"
 import type { DisasterAreaBounds, SelectedPlace } from "@/src/data/mock-disaster-data"
 
-export interface DisasterImagery {
-  beforeImage: File | SatelliteImageMetadata | null
-  afterImage: File | SatelliteImageMetadata | null
-}
+export type DisasterImagery =
+  | { source: null; beforeImage: null; afterImage: null }
+  | { source: "manual"; beforeImage: File | null; afterImage: File | null }
+  | { source: "satellite"; beforeImage: SatelliteImageMetadata; afterImage: SatelliteImageMetadata }
 
 interface DisasterImageryStepProps {
   bounds: DisasterAreaBounds
@@ -51,12 +51,14 @@ function ImageUploadPanel({
   description,
   image,
   onImageChange,
+  satelliteReadOnly = false,
 }: {
   id: string
   title: string
   description: string
   image: File | SatelliteImageMetadata | null
   onImageChange: (image: File | SatelliteImageMetadata | null) => void
+  satelliteReadOnly?: boolean
 }) {
   const input = useRef<HTMLInputElement>(null)
   const pendingUrl = useRef<string | null>(null)
@@ -187,21 +189,23 @@ function ImageUploadPanel({
               <p>Cloud coverage: {image.cloudCoverage === null ? "Not available" : `${image.cloudCoverage.toFixed(1)}%`}</p>
             </div>
           )}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" className="area-secondary-button" onClick={() => input.current?.click()}>
-              <Upload className="size-4" aria-hidden="true" /> Replace manually
-            </button>
-            <button
-              type="button"
-              className="area-secondary-button"
-              onClick={() => {
-                setError("")
-                onImageChange(null)
-              }}
-            >
-              <Trash2 className="size-4" aria-hidden="true" /> Remove
-            </button>
-          </div>
+          {!satelliteReadOnly && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" className="area-secondary-button" onClick={() => input.current?.click()}>
+                <Upload className="size-4" aria-hidden="true" /> Replace
+              </button>
+              <button
+                type="button"
+                className="area-secondary-button"
+                onClick={() => {
+                  setError("")
+                  onImageChange(null)
+                }}
+              >
+                <Trash2 className="size-4" aria-hidden="true" /> Remove
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <label
@@ -237,7 +241,28 @@ export function DisasterImageryStep({
   const [fetchMessage, setFetchMessage] = useState("")
   const [fetchError, setFetchError] = useState("")
   const validBounds = bounds.east > bounds.west && bounds.north > bounds.south
-  const canContinue = validBounds && Boolean(imagery.beforeImage && imagery.afterImage)
+  const canContinue = validBounds && (
+    imagery.source === "satellite"
+    || (imagery.source === "manual" && Boolean(imagery.beforeImage && imagery.afterImage))
+  )
+
+  function useManualImagery() {
+    onImageryChange({ source: "manual", beforeImage: null, afterImage: null })
+    setFetchMessage("")
+    setFetchError("")
+  }
+
+  function updateManualImage(position: "before" | "after", image: File | SatelliteImageMetadata | null) {
+    if (image && !isLocalFile(image)) return
+    const manualImagery = imagery.source === "manual"
+      ? imagery
+      : { source: "manual" as const, beforeImage: null, afterImage: null }
+    onImageryChange({
+      source: "manual",
+      beforeImage: position === "before" ? image : manualImagery.beforeImage,
+      afterImage: position === "after" ? image : manualImagery.afterImage,
+    })
+  }
 
   async function retrieveAvailableImagery() {
     if (!validBounds || fetching) return
@@ -250,7 +275,7 @@ export function DisasterImageryStep({
         setFetchError(`${result.message} Upload both images manually to continue.`)
         return
       }
-      onImageryChange({ beforeImage: result.before, afterImage: result.after })
+      onImageryChange({ source: "satellite", beforeImage: result.before, afterImage: result.after })
       setFetchMessage(result.message)
     } catch (error) {
       setFetchError(error instanceof Error ? error.message : "Satellite imagery lookup failed. Use manual upload.")
@@ -331,20 +356,40 @@ export function DisasterImageryStep({
           {fetchError && <p className="mt-3 text-xs leading-5 text-amber-300" role="alert">{fetchError}</p>}
         </section>
 
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">
+              {imagery.source === "satellite" ? "Selected satellite imagery" : "Manual imagery fallback"}
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              {imagery.source === "satellite"
+                ? "This metadata pair is active. Direct damage-analysis transport still requires local files."
+                : "Upload local Before and After files when satellite imagery is unsuitable or unavailable."}
+            </p>
+          </div>
+          {imagery.source === "satellite" && (
+            <button type="button" className="area-secondary-button" onClick={useManualImagery}>
+              <Upload className="size-4" aria-hidden="true" /> Use manual imagery instead
+            </button>
+          )}
+        </div>
+
         <div className="grid gap-4 lg:grid-cols-2">
           <ImageUploadPanel
             id="before-disaster-image"
             title="Before disaster"
-            description="Upload an image showing this area before the disaster."
+            description={imagery.source === "satellite" ? "Satellite scene captured before the disaster." : "Upload an image showing this area before the disaster."}
             image={imagery.beforeImage}
-            onImageChange={(beforeImage) => onImageryChange({ ...imagery, beforeImage })}
+            satelliteReadOnly={imagery.source === "satellite"}
+            onImageChange={(beforeImage) => updateManualImage("before", beforeImage)}
           />
           <ImageUploadPanel
             id="after-disaster-image"
             title="After disaster"
-            description="Upload an image showing this area after the disaster."
+            description={imagery.source === "satellite" ? "Satellite scene captured after the disaster." : "Upload an image showing this area after the disaster."}
             image={imagery.afterImage}
-            onImageChange={(afterImage) => onImageryChange({ ...imagery, afterImage })}
+            satelliteReadOnly={imagery.source === "satellite"}
+            onImageChange={(afterImage) => updateManualImage("after", afterImage)}
           />
         </div>
 
