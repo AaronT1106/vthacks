@@ -110,6 +110,14 @@ def _search_scenes(
         "collections": ["sentinel-2-l2a"],
         "limit": 100,
     }
+    logger.info(
+        "Sentinel-2 outbound STAC query side=%s bbox=%s datetime=%s collections=%s limit=%s",
+        side,
+        payload["bbox"],
+        payload["datetime"],
+        payload["collections"],
+        payload["limit"],
+    )
     result = _request_json(CATALOG_URL, payload, {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     candidates: list[tuple[float, int, dict[str, Any]]] = []
     features = result.get("features", [])
@@ -164,23 +172,57 @@ def _search_scenes(
     return ([higher_cloud[2]], candidate_count, True) if higher_cloud else ([], candidate_count, False)
 
 
-def _render_scene(token: str, bbox: list[float], captured_at: str, max_cloud: float) -> tuple[bytes, str]:
-    captured_date = captured_at[:10]
+def _web_mercator_bbox(bbox: list[float]) -> list[float]:
+    def project(longitude: float, latitude: float) -> tuple[float, float]:
+        limited_latitude = max(-85.05112878, min(85.05112878, latitude))
+        x = math.radians(longitude) * 6_378_137
+        y = 6_378_137 * math.log(math.tan(math.pi / 4 + math.radians(limited_latitude) / 2))
+        return x, y
+
+    west, south = project(bbox[0], bbox[1])
+    east, north = project(bbox[2], bbox[3])
+    return [west, south, east, north]
+
+
+def _provider_time_range(captured_at: str) -> tuple[str, str]:
+    captured = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+    start = (captured - timedelta(seconds=30)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    end = (captured + timedelta(seconds=30)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return start, end
+
+
+def _render_scene(
+    token: str, bbox: list[float], scene_id: str, captured_at: str, max_cloud: float
+) -> tuple[bytes, str]:
+    time_from, time_to = _provider_time_range(captured_at)
     payload = {
         "input": {
-            "bounds": {"bbox": bbox, "properties": {"crs": "http://www.opengis.net/def/crs/OGC/1.3/CRS84"}},
+            "bounds": {
+                "bbox": _web_mercator_bbox(bbox),
+                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/3857"},
+            },
             "data": [{
                 "type": "sentinel-2-l2a",
                 "dataFilter": {
-                    "timeRange": {"from": f"{captured_date}T00:00:00Z", "to": f"{captured_date}T23:59:59Z"},
+                    "timeRange": {"from": time_from, "to": time_to},
                     "maxCloudCoverage": max_cloud,
                     "mosaickingOrder": "leastCC",
                 },
             }],
         },
-        "output": {"width": 1024, "height": 1024, "responses": [{"identifier": "default", "format": {"type": "image/png"}}]},
-        "evalscript": '//VERSION=3\nfunction setup(){return{input:["B04","B03","B02","dataMask"],output:{bands:4}}}function evaluatePixel(s){return[2.5*s.B04,2.5*s.B03,2.5*s.B02,s.dataMask]}',
+        "output": {
+            "resx": 10,
+            "resy": 10,
+            "responses": [{"identifier": "default", "format": {"type": "image/png"}}],
+        },
+        "evalscript": '//VERSION=3\nfunction setup(){return{input:["B04","B03","B02"],output:{bands:3}}}function evaluatePixel(s){return[2.5*s.B04,2.5*s.B03,2.5*s.B02]}',
     }
+    logger.info(
+        "Rendering Sentinel-2 scene_id=%s capture_time=%s bbox=%s resolution_meters=10 output=image/png",
+        scene_id,
+        captured_at,
+        bbox,
+    )
     request = Request(PROCESS_URL, data=json.dumps(payload).encode(), headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "image/png"}, method="POST")
     try:
         with urlopen(request, timeout=45) as response:
@@ -194,13 +236,13 @@ def _render_scene(token: str, bbox: list[float], captured_at: str, max_cloud: fl
         raise ProviderUnavailableError(
             "preview_image_fetch_failed", "preview-fetch", f"Sentinel-2 preview image fetch failed: {error}"
         ) from error
-    if content_type not in {"image/jpeg", "image/png"} or not image:
+    if content_type != "image/png" or not image.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ProviderUnavailableError(
             "preview_image_fetch_failed",
             "preview-fetch",
-            f"Copernicus returned an unusable Sentinel-2 preview ({content_type or 'missing content type'}).",
+            f"Copernicus returned an unusable Sentinel-2 PNG preview ({content_type or 'missing content type'}).",
         )
-    return image, content_type
+    return image, "image/png"
 
 
 def _analysis_dimensions(bbox: tuple[float, float, float, float]) -> tuple[int, int, float]:
@@ -355,10 +397,9 @@ def _render_metadata_options(
 ) -> list[dict[str, Any]]:
     options = []
     for scene in scenes:
-        logger.info("Rendering Sentinel-2 scene_id=%s capture_time=%s", scene["id"], scene["properties"]["datetime"])
         cloud = float(scene["properties"]["eo:cloud_cover"])
         image, content_type = _render_scene(
-            token, bbox, scene["properties"]["datetime"], max(max_cloud, cloud)
+            token, bbox, scene["id"], scene["properties"]["datetime"], max(max_cloud, cloud)
         )
         options.append(_metadata(
             scene, bbox, requested_date, _cache_preview(

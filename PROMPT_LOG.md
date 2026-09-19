@@ -1111,3 +1111,59 @@ Resolve the active rebase conflicts while preserving satellite imagery metadata 
 - `git diff --check`: passed before this log entry.
 - Browser interaction checks remain pending because no connected browser was available.
 - No dependencies, environment values, CORS, fake imagery files, or damage detections were added.
+
+---
+
+## Sentinel-2 After-Scene Query Regression — 2026-09-19
+
+### Request
+
+Fix the zero-candidate After search for the known-good Blacksburg dates, compare and log the STAC query and filtering, and add regression coverage.
+
+### Files Changed
+
+- `PROMPT_LOG.md`
+- `backend/satellite_imagery.py`
+- `backend/test_main.py`
+
+### Implemented
+
+- Preserved the correct `[minLng, minLat, maxLng, maxLat]` bbox and `sentinel-2-l2a` collection.
+- Applied the incident chronology boundary to the outbound STAC datetime window, so pre-incident scenes cannot consume the 100-result limit before After filtering.
+- Logs the safe outbound bbox, datetime, collection, and limit before the request, then logs raw, accepted, chronology-rejected, metadata-rejected, and duplicate-rejected counts after the response. Credentials are excluded.
+- Added a regression test for `beforeDate=2026-01-01` and `afterDate=2026-09-01`, asserting the January 4 and September 14 captures and exact outbound query fields.
+
+### Validation
+
+- Live FastAPI request returned `available`, `comparisonReady: true`, 14 Before candidates, 8 After candidates, and the expected 2026-01-04 and 2026-09-14 captures.
+- `python -m pytest backend/test_main.py`: 28 passed.
+- `git diff --check`: passed; only Windows line-ending notices were reported.
+
+---
+
+## Sentinel-2 Process API PNG Rendering — 2026-09-19
+
+### Request
+
+Render usable true-color Sentinel-2 images for selected Before and After scenes through the server-side Copernicus Sentinel Hub Process API and expose them through the existing same-origin preview endpoint.
+
+### Files Changed
+
+- `PROMPT_LOG.md`
+- `backend/satellite_imagery.py`
+- `backend/test_main.py`
+
+### Implemented
+
+- Reuses the selected scene's exact WGS84 bounds, projected to EPSG:3857 so the Process API can request 10-meter `resx` and `resy` values.
+- Narrows each Process API time range to 30 seconds before and after the selected scene capture timestamp instead of rendering a whole-day least-cloud mosaic.
+- Requests Sentinel-2 L2A B04, B03, and B02 true color with a three-band evalscript and PNG output.
+- Requires an `image/png` provider response with a PNG signature before placing bytes in the existing one-hour memory cache.
+- Keeps the existing `/api/satellite-imagery/preview/{id}` endpoint, frontend imagery cards, evidence viewer, metadata labels, human-verification text, and genuine-failure manual fallback.
+- Added a mocked Process API test that checks the selected time range, 10-meter sampling, bands, PNG format, exact cached bytes, and preview endpoint content type.
+
+### Validation
+
+- Live Copernicus request returned the known January 4 and September 14 scenes with `comparisonReady: true`.
+- The generated preview returned `HTTP 200`, `Content-Type: image/png`, and 529,764 bytes from backend memory.
+- `python -m pytest backend/test_main.py`: 29 passed.

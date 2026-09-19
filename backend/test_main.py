@@ -1,11 +1,12 @@
 """Run with: python -m unittest -v (from backend/)."""
 
 import asyncio
+import json
 from datetime import date
 from io import BytesIO
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
@@ -177,7 +178,7 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertTrue(body["manualUploadRecommended"])
         self.assertEqual(body["failure"]["code"], "no_candidate_scene")
 
-    @patch("satellite_imagery._render_scene", return_value=(b"jpeg-data", "image/jpeg"))
+    @patch("satellite_imagery._render_scene", return_value=(b"\x89PNG\r\n\x1a\npreview", "image/png"))
     @patch("satellite_imagery._search_scenes")
     @patch("satellite_imagery._access_token", return_value="token")
     def test_sentinel_returns_low_cloud_live_previews(self, _token, search_scene, render_scene):
@@ -208,7 +209,7 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertTrue(body["comparisonReady"])
         self.assertIsNone(body["failure"])
 
-    @patch("satellite_imagery._render_scene", return_value=(b"jpeg-data", "image/jpeg"))
+    @patch("satellite_imagery._render_scene", return_value=(b"\x89PNG\r\n\x1a\npreview", "image/png"))
     @patch("satellite_imagery._search_scenes")
     @patch("satellite_imagery._access_token", return_value="token")
     def test_higher_cloud_pair_requires_explicit_selection(self, _token, search_scene, _render_scene):
@@ -316,8 +317,9 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertEqual(count, 3)
         self.assertFalse(needs_confirmation)
 
+    @patch("satellite_imagery.logger.info")
     @patch("satellite_imagery._request_json")
-    def test_known_good_blacksburg_dates_keep_after_scenes_inside_catalog_query(self, request_json):
+    def test_known_good_blacksburg_dates_keep_after_scenes_inside_catalog_query(self, request_json, log_info):
         from satellite_imagery import _search_scenes
 
         bbox = [-80.43, 37.20, -80.39, 37.25]
@@ -350,6 +352,11 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertEqual(before[0]["properties"]["datetime"], "2026-01-04T16:13:22.446Z")
         self.assertEqual(after[0]["properties"]["datetime"], "2026-09-14T16:23:09.795Z")
         self.assertEqual((before_count, after_count), (1, 1))
+        outbound_logs = [call for call in log_info.call_args_list if "outbound STAC query" in call.args[0]]
+        self.assertEqual(len(outbound_logs), 2)
+        self.assertEqual(outbound_logs[1].args[1:], (
+            "after", bbox, "2026-09-01T00:00:00Z/2026-09-15T23:59:59Z", ["sentinel-2-l2a"], 100,
+        ))
 
     @patch("satellite_imagery._access_token")
     def test_missing_credentials_returns_clear_manual_fallback(self, access_token):
@@ -376,6 +383,46 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertIn('source: "/api/satellite-imagery"', config)
         self.assertIn('source: "/api/satellite-imagery/preview/:path*"', config)
         self.assertIn('destination: `${normalizedBackendUrl}/api/satellite-imagery/preview/:path*`', config)
+
+    @patch("satellite_imagery.urlopen")
+    def test_process_api_renders_exact_scene_as_ten_meter_png_preview(self, urlopen):
+        from satellite_imagery import PROCESS_URL, _cache_preview, _render_scene
+
+        png_bytes = b"\x89PNG\r\n\x1a\nrendered-sentinel"
+        provider_response = MagicMock()
+        provider_response.status = 200
+        provider_response.getcode.return_value = 200
+        provider_response.headers.get_content_type.return_value = "image/png"
+        provider_response.read.return_value = png_bytes
+        provider_response.__enter__.return_value = provider_response
+        urlopen.return_value = provider_response
+        bbox = [-80.43, 37.20, -80.39, 37.25]
+        scene_id = "S2-known-scene"
+        capture_time = "2026-09-14T16:23:09.795Z"
+
+        rendered, content_type = _render_scene("token", bbox, scene_id, capture_time, 40)
+
+        provider_request = urlopen.call_args.args[0]
+        payload = json.loads(provider_request.data)
+        self.assertEqual(provider_request.full_url, PROCESS_URL)
+        self.assertEqual(provider_request.headers["Accept"], "image/png")
+        self.assertEqual(payload["input"]["data"][0]["type"], "sentinel-2-l2a")
+        self.assertEqual(payload["input"]["data"][0]["dataFilter"]["timeRange"], {
+            "from": "2026-09-14T16:22:39.795Z",
+            "to": "2026-09-14T16:23:39.795Z",
+        })
+        self.assertEqual(payload["output"]["resx"], 10)
+        self.assertEqual(payload["output"]["resy"], 10)
+        self.assertEqual(payload["output"]["responses"][0]["format"]["type"], "image/png")
+        self.assertIn('input:["B04","B03","B02"]', payload["evalscript"])
+        self.assertEqual(content_type, "image/png")
+        self.assertEqual(rendered, png_bytes)
+
+        preview_url = _cache_preview(rendered, content_type, bbox, scene_id, capture_time)
+        preview_response = self.client.get(preview_url)
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertEqual(preview_response.headers["content-type"], "image/png")
+        self.assertEqual(preview_response.content, png_bytes)
 
     def test_satellite_imagery_rejects_invalid_bounds_dates_and_fields(self):
         invalid_requests = [
