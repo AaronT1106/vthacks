@@ -191,7 +191,7 @@ Build the initial frontend-only DisasterLens dashboard and simulated route-analy
 
 ---
 
-## Mock Route Analysis API Integration — 2026-09-19
+## Mock Route Analysis API Integration ï¿½ 2026-09-19
 
 ### Request
 
@@ -230,3 +230,31 @@ Define a minimal route-analysis contract, implement one FastAPI POST endpoint, a
 - `npm run build`: passed, including TypeScript and static generation. The sandboxed attempt compiled but hit `spawn EPERM` when starting the TypeScript worker; approved execution outside the sandbox succeeded.
 - `git diff --check`: passed.
 - Browser visual/interaction QA could not run because the computer-use inventory contained no connected browsers. Live HTTP and programmatic rendering checks were completed instead; mouse interaction and visual layout remain unverified in a browser.
+## Mapbox Experience Upgrade
+
+### Request
+
+Improve only the existing DisasterLens map so a configured Mapbox token provides a polished, persistent interactive basemap while the no-token demo map remains fully usable.
+
+### Files Changed
+
+- Refactored `frontend/src/components/disaster-map.tsx`.
+- Extended the incident view configuration in `frontend/src/data/mock-disaster-data.ts`.
+- Refined Mapbox controls and canvas styles in `frontend/app/globals.css`.
+- Created ignored `frontend/.env.local` with an empty `NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN` entry.
+
+### Implemented
+
+- Mapbox now initializes once instead of being recreated by layer, endpoint, selection, or route-analysis updates, preserving pan and zoom state.
+- Existing mock sources and layers update in place and are restored after dark/satellite style changes.
+- Added responsive map resizing, compact zoom controls, a Blacksburg recenter control, muted dark-map labels, and clearer real-basemap versus demo-map status labels.
+- Missing, empty, and authentication-invalid tokens fall back to the existing demo map without interrupting the dashboard.
+- Kept the map component interface, dashboard layout, mock workflow, dependencies, and backend unchanged.
+
+### Validation
+
+- `npm run lint` passed.
+- `npx tsc --noEmit` passed.
+- `npm run build -- --webpack` passed and produced the static home route.
+- The development server loaded with the empty token, returned HTTP 200, rendered the `Demo Map Â· Mock Data` label, and did not enter the Mapbox loading path.
+- Live Mapbox rendering, pan/zoom, recentering, and responsive visual checks remain pending until a valid public token is added; browser automation was unavailable in this session.

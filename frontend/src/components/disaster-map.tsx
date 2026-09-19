@@ -1,9 +1,17 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { AlertTriangle, Building2, MapPin, Navigation, TentTree, Waves } from "lucide-react"
+import {
+  AlertTriangle,
+  Building2,
+  LocateFixed,
+  MapPin,
+  Navigation,
+  TentTree,
+  Waves,
+} from "lucide-react"
 import type { FeatureCollection, LineString, Point, Polygon } from "geojson"
-import type { Map as MapboxMap } from "mapbox-gl"
+import type { GeoJSONSource, Map as MapboxMap } from "mapbox-gl"
 import {
   hazards,
   hospitals,
@@ -27,6 +35,25 @@ interface DisasterMapProps {
   destination: LocationOption
 }
 
+interface CurrentMapState {
+  layers: MapLayerVisibility
+  analysisComplete: boolean
+  recommendedRoute: Route | null
+  selectedHazardId: string
+  startingLocation: LocationOption
+  destination: LocationOption
+}
+
+interface StoredCamera {
+  center: [number, number]
+  zoom: number
+  pitch: number
+  bearing: number
+}
+
+const DARK_MAP_STYLE = "mapbox://styles/mapbox/dark-v11"
+const SATELLITE_MAP_STYLE = "mapbox://styles/mapbox/satellite-streets-v12"
+
 const floodHazard = hazards.find((hazard) => hazard.type === "flooding")!
 const bridgeHazard = hazards.find((hazard) => hazard.type === "bridge-damage")!
 const unsafeRoute = routes.find((route) => route.kind === "unsafe")!
@@ -44,7 +71,9 @@ function polygonCollection(hazard: Hazard): FeatureCollection<Polygon> {
   }
 }
 
-function pointCollection(items: Array<{ id: string; name: string; coordinates: [number, number] }>): FeatureCollection<Point> {
+function pointCollection(
+  items: Array<{ id: string; name: string; coordinates: [number, number] }>,
+): FeatureCollection<Point> {
   return {
     type: "FeatureCollection",
     features: items.map((item) => ({
@@ -68,6 +97,214 @@ function routeCollection(coordinates: Array<[number, number]>): FeatureCollectio
   }
 }
 
+function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) {
+  if (!map.getSource("risk-area")) {
+    map.addSource("risk-area", { type: "geojson", data: polygonCollection(floodHazard) })
+    map.addLayer({
+      id: "risk-area-fill",
+      type: "fill",
+      source: "risk-area",
+      paint: { "fill-color": "#f97316", "fill-opacity": 0.13 },
+    })
+  }
+
+  if (!map.getSource("flooding")) {
+    map.addSource("flooding", { type: "geojson", data: polygonCollection(floodHazard) })
+    map.addLayer({
+      id: "flooding-fill",
+      type: "fill",
+      source: "flooding",
+      paint: {
+        "fill-color": "#ef4444",
+        "fill-opacity": 0.3,
+        "fill-outline-color": "#fda4af",
+      },
+    })
+  }
+
+  if (!map.getSource("bridge-damage")) {
+    map.addSource("bridge-damage", { type: "geojson", data: polygonCollection(bridgeHazard) })
+    map.addLayer({
+      id: "bridge-damage-fill",
+      type: "fill",
+      source: "bridge-damage",
+      paint: {
+        "fill-color": "#f59e0b",
+        "fill-opacity": 0.36,
+        "fill-outline-color": "#fcd34d",
+      },
+    })
+  }
+
+  if (!map.getSource("unsafe-route")) {
+    map.addSource("unsafe-route", {
+      type: "geojson",
+      data: routeCollection([
+        currentState.startingLocation.coordinates,
+        ...unsafeRoute.coordinates.slice(1, -1),
+        currentState.destination.coordinates,
+      ]),
+    })
+    map.addLayer({
+      id: "unsafe-route-line",
+      type: "line",
+      source: "unsafe-route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#fb7185",
+        "line-width": 4,
+        "line-opacity": 0.55,
+        "line-dasharray": [1.5, 1.5],
+      },
+    })
+  }
+
+  if (!map.getSource("safe-route")) {
+    map.addSource("safe-route", {
+      type: "geojson",
+      data: routeCollection(currentState.recommendedRoute?.coordinates ?? []),
+    })
+    map.addLayer({
+      id: "safe-route-line-shadow",
+      type: "line",
+      source: "safe-route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#062d3b", "line-width": 9, "line-opacity": 0.8 },
+    })
+    map.addLayer({
+      id: "safe-route-line",
+      type: "line",
+      source: "safe-route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#22d3ee", "line-width": 4.5 },
+    })
+  }
+
+  if (!map.getSource("hospitals")) {
+    map.addSource("hospitals", { type: "geojson", data: pointCollection(hospitals) })
+    map.addLayer({
+      id: "hospital-points",
+      type: "circle",
+      source: "hospitals",
+      paint: {
+        "circle-color": "#38bdf8",
+        "circle-radius": 7,
+        "circle-stroke-color": "#e0f2fe",
+        "circle-stroke-width": 2,
+      },
+    })
+  }
+
+  if (!map.getSource("shelters")) {
+    map.addSource("shelters", { type: "geojson", data: pointCollection(shelters) })
+    map.addLayer({
+      id: "shelter-points",
+      type: "circle",
+      source: "shelters",
+      paint: {
+        "circle-color": "#34d399",
+        "circle-radius": 6,
+        "circle-stroke-color": "#d1fae5",
+        "circle-stroke-width": 2,
+      },
+    })
+  }
+
+  if (!map.getSource("route-endpoints")) {
+    map.addSource("route-endpoints", {
+      type: "geojson",
+      data: pointCollection([currentState.startingLocation, currentState.destination]),
+    })
+    map.addLayer({
+      id: "route-endpoint-points",
+      type: "circle",
+      source: "route-endpoints",
+      paint: {
+        "circle-color": "#f8fafc",
+        "circle-radius": 6,
+        "circle-stroke-color": "#0f172a",
+        "circle-stroke-width": 3,
+      },
+    })
+  }
+}
+
+function setLayerVisibility(map: MapboxMap, layerId: string, visible: boolean) {
+  if (map.getLayer(layerId)) {
+    map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none")
+  }
+}
+
+function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) {
+  if (!map.isStyleLoaded()) return
+
+  const endpointSource = map.getSource("route-endpoints") as GeoJSONSource | undefined
+  endpointSource?.setData(pointCollection([currentState.startingLocation, currentState.destination]))
+
+  const unsafeRouteSource = map.getSource("unsafe-route") as GeoJSONSource | undefined
+  unsafeRouteSource?.setData(
+    routeCollection([
+      currentState.startingLocation.coordinates,
+      ...unsafeRoute.coordinates.slice(1, -1),
+      currentState.destination.coordinates,
+    ]),
+  )
+
+  const safeRouteSource = map.getSource("safe-route") as GeoJSONSource | undefined
+  safeRouteSource?.setData(routeCollection(currentState.recommendedRoute?.coordinates ?? []))
+
+  setLayerVisibility(map, "risk-area-fill", currentState.layers.risk)
+  setLayerVisibility(map, "flooding-fill", currentState.layers.flooding)
+  setLayerVisibility(map, "bridge-damage-fill", currentState.layers.bridgeDamage)
+  setLayerVisibility(map, "hospital-points", currentState.layers.hospitals)
+  setLayerVisibility(map, "shelter-points", currentState.layers.shelters)
+  setLayerVisibility(map, "unsafe-route-line", currentState.analysisComplete)
+  setLayerVisibility(
+    map,
+    "safe-route-line-shadow",
+    currentState.analysisComplete && currentState.layers.safeRoute,
+  )
+  setLayerVisibility(
+    map,
+    "safe-route-line",
+    currentState.analysisComplete && currentState.layers.safeRoute,
+  )
+
+  if (map.getLayer("flooding-fill")) {
+    const floodSelected = currentState.selectedHazardId === floodHazard.id
+    map.setPaintProperty("flooding-fill", "fill-color", floodSelected ? "#fb7185" : "#ef4444")
+    map.setPaintProperty("flooding-fill", "fill-opacity", floodSelected ? 0.48 : 0.3)
+  }
+
+  if (map.getLayer("bridge-damage-fill")) {
+    const bridgeSelected = currentState.selectedHazardId === bridgeHazard.id
+    map.setPaintProperty("bridge-damage-fill", "fill-color", bridgeSelected ? "#fbbf24" : "#f59e0b")
+    map.setPaintProperty("bridge-damage-fill", "fill-opacity", bridgeSelected ? 0.55 : 0.36)
+  }
+}
+
+function muteBasemapLabels(map: MapboxMap) {
+  for (const layer of map.getStyle().layers ?? []) {
+    if (layer.type !== "symbol" || !layer.layout?.["text-field"]) continue
+    map.setPaintProperty(layer.id, "text-color", "#8795a8")
+    map.setPaintProperty(layer.id, "text-halo-color", "#101722")
+    map.setPaintProperty(layer.id, "text-halo-width", 0.8)
+  }
+}
+
+function isAuthenticationError(error: Error) {
+  const errorWithStatus = error as Error & { status?: number }
+  const message = error.message.toLowerCase()
+  return (
+    errorWithStatus.status === 401 ||
+    errorWithStatus.status === 403 ||
+    message.includes("access token") ||
+    message.includes("unauthorized") ||
+    message.includes("not authorized") ||
+    message.includes("invalid token")
+  )
+}
+
 export function DisasterMap({
   layers,
   analysisComplete,
@@ -78,157 +315,177 @@ export function DisasterMap({
   destination,
 }: DisasterMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
+  const map = useRef<MapboxMap | null>(null)
+  const currentStyle = useRef<"dark" | "satellite">(layers.satellite ? "satellite" : "dark")
+  const storedCamera = useRef<StoredCamera | null>(null)
+  const currentMapState = useRef<CurrentMapState>({
+    layers,
+    analysisComplete,
+    recommendedRoute,
+    selectedHazardId,
+    startingLocation,
+    destination,
+  })
+  const hazardSelectionHandler = useRef(onSelectHazard)
   const [mapFailed, setMapFailed] = useState(false)
-  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
+  const [mapReady, setMapReady] = useState(false)
+  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
+
+  useEffect(() => {
+    currentMapState.current = {
+      layers,
+      analysisComplete,
+      recommendedRoute,
+      selectedHazardId,
+      startingLocation,
+      destination,
+    }
+    hazardSelectionHandler.current = onSelectHazard
+  }, [analysisComplete, destination, layers, onSelectHazard, recommendedRoute, selectedHazardId, startingLocation])
 
   useEffect(() => {
     if (!mapboxToken || !mapContainer.current || mapFailed) return
 
-    let map: MapboxMap | null = null
     let disposed = false
+    let initializedMap: MapboxMap | null = null
 
     async function initializeMap() {
-      const mapboxgl = (await import("mapbox-gl")).default
-      if (disposed || !mapContainer.current) return
+      try {
+        const mapboxgl = (await import("mapbox-gl")).default
+        if (disposed || !mapContainer.current) return
 
-      mapboxgl.accessToken = mapboxToken
-      map = new mapboxgl.Map({
-        container: mapContainer.current,
-        style: layers.satellite
-          ? "mapbox://styles/mapbox/satellite-streets-v12"
-          : "mapbox://styles/mapbox/dark-v11",
-        center: incident.center,
-        zoom: 13.4,
-        pitch: 20,
-        bearing: -8,
-        attributionControl: false,
-      })
+        mapboxgl.accessToken = mapboxToken
+        initializedMap = new mapboxgl.Map({
+          container: mapContainer.current,
+          style: currentStyle.current === "satellite" ? SATELLITE_MAP_STYLE : DARK_MAP_STYLE,
+          center: incident.center,
+          zoom: incident.mapView.zoom,
+          pitch: incident.mapView.pitch,
+          bearing: incident.mapView.bearing,
+          attributionControl: false,
+        })
+        map.current = initializedMap
 
-      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-left")
-      map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right")
+        initializedMap.addControl(
+          new mapboxgl.NavigationControl({ showCompass: false, visualizePitch: false }),
+          "bottom-left",
+        )
+        initializedMap.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right")
 
-      map.on("error", (event) => {
-        if (event.error?.message.toLowerCase().includes("token")) setMapFailed(true)
-      })
-
-      map.on("load", () => {
-        if (!map) return
-
-        map.addSource("risk-area", { type: "geojson", data: polygonCollection(floodHazard) })
-        map.addLayer({
-          id: "risk-area-fill",
-          type: "fill",
-          source: "risk-area",
-          layout: { visibility: layers.risk ? "visible" : "none" },
-          paint: { "fill-color": "#f97316", "fill-opacity": 0.13 },
+        initializedMap.on("error", (event) => {
+          if (!isAuthenticationError(event.error)) return
+          setMapReady(false)
+          setMapFailed(true)
         })
 
-        map.addSource("flooding", { type: "geojson", data: polygonCollection(floodHazard) })
-        map.addLayer({
-          id: "flooding-fill",
-          type: "fill",
-          source: "flooding",
-          layout: { visibility: layers.flooding ? "visible" : "none" },
-          paint: {
-            "fill-color": selectedHazardId === floodHazard.id ? "#fb7185" : "#ef4444",
-            "fill-opacity": selectedHazardId === floodHazard.id ? 0.48 : 0.3,
-            "fill-outline-color": "#fda4af",
-          },
+        initializedMap.on("style.load", () => {
+          if (!initializedMap || disposed) return
+
+          if (currentStyle.current === "dark") muteBasemapLabels(initializedMap)
+          addMockSourcesAndLayers(initializedMap, currentMapState.current)
+          synchronizeMockMapState(initializedMap, currentMapState.current)
+
+          if (storedCamera.current) {
+            initializedMap.jumpTo(storedCamera.current)
+            storedCamera.current = null
+          }
+
+          setMapReady(true)
+          window.requestAnimationFrame(() => initializedMap?.resize())
         })
 
-        map.addSource("bridge-damage", { type: "geojson", data: polygonCollection(bridgeHazard) })
-        map.addLayer({
-          id: "bridge-damage-fill",
-          type: "fill",
-          source: "bridge-damage",
-          layout: { visibility: layers.bridgeDamage ? "visible" : "none" },
-          paint: {
-            "fill-color": selectedHazardId === bridgeHazard.id ? "#fbbf24" : "#f59e0b",
-            "fill-opacity": selectedHazardId === bridgeHazard.id ? 0.55 : 0.36,
-            "fill-outline-color": "#fcd34d",
-          },
+        initializedMap.on("click", (event) => {
+          if (!initializedMap) return
+          const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
+            initializedMap?.getLayer(layerId),
+          )
+          if (clickableLayers.length === 0) return
+
+          const clickedFeature = initializedMap.queryRenderedFeatures(event.point, {
+            layers: clickableLayers,
+          })[0]
+          const hazardId = clickedFeature?.properties?.hazardId
+          const selectedHazard = hazards.find((hazard) => hazard.id === hazardId)
+          if (selectedHazard) hazardSelectionHandler.current(selectedHazard)
         })
 
-        map.addSource("unsafe-route", { type: "geojson", data: routeCollection([
-          startingLocation.coordinates, ...unsafeRoute.coordinates.slice(1, -1), destination.coordinates,
-        ]) })
-        map.addLayer({
-          id: "unsafe-route-line",
-          type: "line",
-          source: "unsafe-route",
-          layout: { visibility: analysisComplete ? "visible" : "none", "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": "#fb7185", "line-width": 4, "line-opacity": 0.55, "line-dasharray": [1.5, 1.5] },
+        initializedMap.on("mousemove", (event) => {
+          if (!initializedMap) return
+          const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
+            initializedMap?.getLayer(layerId),
+          )
+          const hasInteractiveFeature =
+            clickableLayers.length > 0 &&
+            initializedMap.queryRenderedFeatures(event.point, { layers: clickableLayers }).length > 0
+          initializedMap.getCanvas().style.cursor = hasInteractiveFeature ? "pointer" : ""
         })
-
-        map.addSource("safe-route", { type: "geojson", data: routeCollection(recommendedRoute?.coordinates ?? []) })
-        map.addLayer({
-          id: "safe-route-line-shadow",
-          type: "line",
-          source: "safe-route",
-          layout: { visibility: analysisComplete && layers.safeRoute ? "visible" : "none", "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": "#062d3b", "line-width": 9, "line-opacity": 0.8 },
-        })
-        map.addLayer({
-          id: "safe-route-line",
-          type: "line",
-          source: "safe-route",
-          layout: { visibility: analysisComplete && layers.safeRoute ? "visible" : "none", "line-cap": "round", "line-join": "round" },
-          paint: { "line-color": "#22d3ee", "line-width": 4.5 },
-        })
-
-        map.addSource("hospitals", { type: "geojson", data: pointCollection(hospitals) })
-        map.addLayer({
-          id: "hospital-points",
-          type: "circle",
-          source: "hospitals",
-          layout: { visibility: layers.hospitals ? "visible" : "none" },
-          paint: { "circle-color": "#38bdf8", "circle-radius": 7, "circle-stroke-color": "#e0f2fe", "circle-stroke-width": 2 },
-        })
-
-        map.addSource("shelters", { type: "geojson", data: pointCollection(shelters) })
-        map.addLayer({
-          id: "shelter-points",
-          type: "circle",
-          source: "shelters",
-          layout: { visibility: layers.shelters ? "visible" : "none" },
-          paint: { "circle-color": "#34d399", "circle-radius": 6, "circle-stroke-color": "#d1fae5", "circle-stroke-width": 2 },
-        })
-
-        map.addSource("route-endpoints", {
-          type: "geojson",
-          data: pointCollection([startingLocation, destination]),
-        })
-        map.addLayer({
-          id: "route-endpoint-points",
-          type: "circle",
-          source: "route-endpoints",
-          paint: { "circle-color": "#f8fafc", "circle-radius": 6, "circle-stroke-color": "#0f172a", "circle-stroke-width": 3 },
-        })
-
-        map.on("click", "flooding-fill", () => onSelectHazard(floodHazard))
-        map.on("click", "bridge-damage-fill", () => onSelectHazard(bridgeHazard))
-        for (const layerId of ["flooding-fill", "bridge-damage-fill"]) {
-          map.on("mouseenter", layerId, () => {
-            if (map) map.getCanvas().style.cursor = "pointer"
-          })
-          map.on("mouseleave", layerId, () => {
-            if (map) map.getCanvas().style.cursor = ""
-          })
-        }
-      })
+      } catch {
+        if (!disposed) setMapFailed(true)
+      }
     }
 
     void initializeMap()
+
     return () => {
       disposed = true
-      map?.remove()
+      initializedMap?.remove()
+      if (map.current === initializedMap) map.current = null
     }
-  }, [analysisComplete, destination, layers, mapFailed, mapboxToken, onSelectHazard, recommendedRoute, selectedHazardId, startingLocation])
+  }, [mapFailed, mapboxToken])
+
+  useEffect(() => {
+    if (!map.current || !mapReady) return
+    synchronizeMockMapState(map.current, currentMapState.current)
+  }, [analysisComplete, destination, layers, mapReady, recommendedRoute, selectedHazardId, startingLocation])
+
+  useEffect(() => {
+    if (!map.current || !mapReady) return
+
+    const requestedStyle = layers.satellite ? "satellite" : "dark"
+    if (requestedStyle === currentStyle.current) return
+
+    const center = map.current.getCenter()
+    storedCamera.current = {
+      center: [center.lng, center.lat],
+      zoom: map.current.getZoom(),
+      pitch: map.current.getPitch(),
+      bearing: map.current.getBearing(),
+    }
+    currentStyle.current = requestedStyle
+    setMapReady(false)
+    map.current.setStyle(requestedStyle === "satellite" ? SATELLITE_MAP_STYLE : DARK_MAP_STYLE)
+  }, [layers.satellite, mapReady])
+
+  useEffect(() => {
+    const container = mapContainer.current
+    if (!container || !map.current || !mapReady) return
+
+    const resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => map.current?.resize())
+    })
+    resizeObserver.observe(container)
+    map.current.resize()
+
+    return () => resizeObserver.disconnect()
+  }, [mapReady])
+
+  function recenterMap() {
+    map.current?.easeTo({
+      center: incident.center,
+      zoom: incident.mapView.zoom,
+      pitch: incident.mapView.pitch,
+      bearing: incident.mapView.bearing,
+      duration: 650,
+    })
+  }
 
   const useFallback = !mapboxToken || mapFailed
 
   return (
-    <section className="relative min-h-[520px] flex-1 overflow-hidden bg-[#07101b] lg:min-h-0" aria-label="Disaster situation map">
+    <section
+      className="relative min-h-[520px] flex-1 overflow-hidden bg-[#07101b] lg:min-h-0"
+      aria-label="Disaster situation map"
+    >
       {useFallback ? (
         <FallbackMap
           layers={layers}
@@ -240,15 +497,35 @@ export function DisasterMap({
           destination={destination}
         />
       ) : (
-        <div ref={mapContainer} className="absolute inset-0" />
+        <div ref={mapContainer} className="absolute inset-0 min-h-full min-w-full" />
+      )}
+
+      {!useFallback && !mapReady && (
+        <div className="pointer-events-none absolute inset-0 z-[5] grid place-items-center bg-[#07101b]">
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="button-spinner" /> Loading Mapbox basemap
+          </div>
+        </div>
       )}
 
       <div className="pointer-events-none absolute left-4 top-4 z-10 flex flex-wrap items-center gap-2">
         <span className="mock-badge border-amber-400/20 bg-amber-400/10 text-amber-200">Mock data</span>
-        <span className="rounded-md border border-white/10 bg-[#07101b]/85 px-2 py-1 text-[10px] text-slate-400 backdrop-blur">
-          {useFallback ? "Local schematic map" : "Mapbox live canvas"} · Illustrative routes
+        <span className="rounded-md border border-white/10 bg-[#07101b]/85 px-2 py-1 text-[10px] text-slate-400 shadow-lg backdrop-blur">
+          {useFallback ? "Demo Map · Mock Data" : "Mapbox Basemap · Mock Overlays"}
         </span>
       </div>
+
+      {!useFallback && mapReady && (
+        <button
+          type="button"
+          onClick={recenterMap}
+          className="map-recenter-button"
+          aria-label="Recenter map on the Blacksburg operations area"
+          title="Recenter map"
+        >
+          <LocateFixed className="size-4" aria-hidden="true" />
+        </button>
+      )}
 
       <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-white/10 bg-[#07101b]/90 px-3 py-2 text-[10px] text-slate-400 shadow-xl backdrop-blur">
         <Legend color="bg-cyan-400" label="Recommended" />
@@ -294,39 +571,115 @@ function FallbackMap({
         </g>
         <g className="fallback-minor-roads" fill="none" strokeLinecap="round">
           {Array.from({ length: 8 }).map((_, index) => (
-            <path key={index} d={`M${80 + index * 105} -20 C${40 + index * 92} 210 ${175 + index * 70} 420 ${90 + index * 115} 740`} />
+            <path
+              key={index}
+              d={`M${80 + index * 105} -20 C${40 + index * 92} 210 ${175 + index * 70} 420 ${90 + index * 115} 740`}
+            />
           ))}
         </g>
         {layers.risk && <ellipse cx="492" cy="360" rx="150" ry="105" fill="#f97316" opacity="0.1" />}
         {analysisComplete && (
-          <polyline points={[startPoint, projectDemoPoint(floodHazard.coordinates), endPoint].map((point) => point.join(",")).join(" ")} fill="none" stroke="#fb7185" strokeWidth="6" strokeDasharray="12 12" opacity="0.58" />
+          <polyline
+            points={[startPoint, projectDemoPoint(floodHazard.coordinates), endPoint]
+              .map((point) => point.join(","))
+              .join(" ")}
+            fill="none"
+            stroke="#fb7185"
+            strokeWidth="6"
+            strokeDasharray="12 12"
+            opacity="0.58"
+          />
         )}
         {analysisComplete && layers.safeRoute && recommendedRoute && (
           <>
-            <polyline points={routePoints} fill="none" stroke="#07384a" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-            <polyline points={routePoints} fill="none" stroke="#22d3ee" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <polyline
+              points={routePoints}
+              fill="none"
+              stroke="#07384a"
+              strokeWidth="14"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <polyline
+              points={routePoints}
+              fill="none"
+              stroke="#22d3ee"
+              strokeWidth="6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </>
         )}
         {layers.flooding && (
-          <path d="M414 298 C458 258 545 280 570 342 C585 382 525 420 460 397 C405 378 378 335 414 298Z" fill="#ef4444" opacity={selectedHazardId === floodHazard.id ? 0.52 : 0.32} stroke="#fb7185" strokeWidth="2" />
+          <path
+            d="M414 298 C458 258 545 280 570 342 C585 382 525 420 460 397 C405 378 378 335 414 298Z"
+            fill="#ef4444"
+            opacity={selectedHazardId === floodHazard.id ? 0.52 : 0.32}
+            stroke="#fb7185"
+            strokeWidth="2"
+          />
         )}
         {layers.bridgeDamage && (
-          <rect x="588" y="443" width="70" height="40" rx="9" fill="#f59e0b" opacity={selectedHazardId === bridgeHazard.id ? 0.64 : 0.4} stroke="#fcd34d" strokeWidth="2" transform="rotate(-18 623 463)" />
+          <rect
+            x="588"
+            y="443"
+            width="70"
+            height="40"
+            rx="9"
+            fill="#f59e0b"
+            opacity={selectedHazardId === bridgeHazard.id ? 0.64 : 0.4}
+            stroke="#fcd34d"
+            strokeWidth="2"
+            transform="rotate(-18 623 463)"
+          />
         )}
       </svg>
 
-      <MapMarker point={startPoint} label={startingLocation.name} icon={Navigation} tone="bg-slate-100 text-slate-950" />
-      <MapMarker point={endPoint} label={destination.name} icon={MapPin} tone="bg-sky-400 text-slate-950" />
-      {layers.hospitals && <MapMarker className="left-[76%] top-[70%]" label="Hospital" icon={Building2} tone="bg-sky-500 text-white" />}
-      {layers.shelters && <MapMarker className="left-[73%] top-[31%]" label="Shelter" icon={TentTree} tone="bg-emerald-500 text-white" />}
-      {layers.shelters && <MapMarker className="left-[39%] top-[66%]" label="Shelter" icon={TentTree} tone="bg-emerald-500 text-white" />}
+      <MapMarker
+        point={startPoint}
+        label={startingLocation.name}
+        icon={Navigation}
+        tone="bg-slate-100 text-slate-950"
+      />
+      <MapMarker
+        point={endPoint}
+        label={destination.name}
+        icon={MapPin}
+        tone="bg-sky-400 text-slate-950"
+      />
+      {layers.hospitals && (
+        <MapMarker
+          className="left-[76%] top-[70%]"
+          label="Hospital"
+          icon={Building2}
+          tone="bg-sky-500 text-white"
+        />
+      )}
+      {layers.shelters && (
+        <MapMarker
+          className="left-[73%] top-[31%]"
+          label="Shelter"
+          icon={TentTree}
+          tone="bg-emerald-500 text-white"
+        />
+      )}
+      {layers.shelters && (
+        <MapMarker
+          className="left-[39%] top-[66%]"
+          label="Shelter"
+          icon={TentTree}
+          tone="bg-emerald-500 text-white"
+        />
+      )}
 
       {layers.flooding && (
         <button
           type="button"
           aria-label="Select flooded road hazard"
           onClick={() => onSelectHazard(floodHazard)}
-          className={`hazard-map-button left-[52%] top-[47%] ${selectedHazardId === floodHazard.id ? "ring-4 ring-red-400/25" : ""}`}
+          className={`hazard-map-button left-[52%] top-[47%] ${
+            selectedHazardId === floodHazard.id ? "ring-4 ring-red-400/25" : ""
+          }`}
         >
           <Waves className="size-4" />
         </button>
@@ -336,13 +689,15 @@ function FallbackMap({
           type="button"
           aria-label="Select bridge damage hazard"
           onClick={() => onSelectHazard(bridgeHazard)}
-          className={`hazard-map-button left-[67%] top-[65%] bg-amber-500 text-slate-950 ${selectedHazardId === bridgeHazard.id ? "ring-4 ring-amber-400/25" : ""}`}
+          className={`hazard-map-button left-[67%] top-[65%] bg-amber-500 text-slate-950 ${
+            selectedHazardId === bridgeHazard.id ? "ring-4 ring-amber-400/25" : ""
+          }`}
         >
           <AlertTriangle className="size-4" />
         </button>
       )}
 
-      <div className="absolute right-4 top-4 rounded-md border border-white/10 bg-[#07101b]/85 px-2.5 py-2 text-right backdrop-blur">
+      <div className="absolute right-4 top-4 rounded-md border border-white/10 bg-[#07101b]/85 px-2.5 py-2 text-right shadow-lg backdrop-blur">
         <p className="font-mono text-[10px] text-slate-300">37.226° N, 80.414° W</p>
         <p className="mt-1 text-[9px] uppercase tracking-wider text-slate-600">Blacksburg operations area</p>
       </div>
@@ -364,11 +719,16 @@ function MapMarker({
   tone: string
 }) {
   return (
-    <div style={point ? { left: `${point[0] / 9}%`, top: `${point[1] / 7}%` } : undefined} className={`pointer-events-none absolute z-[2] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${className ?? ""}`}>
+    <div
+      style={point ? { left: `${point[0] / 9}%`, top: `${point[1] / 7}%` } : undefined}
+      className={`pointer-events-none absolute z-[2] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${className ?? ""}`}
+    >
       <span className={`grid size-7 place-items-center rounded-full border-2 border-[#07101b] shadow-lg ${tone}`}>
         <Icon className="size-3.5" />
       </span>
-      <span className="mt-1 rounded bg-[#07101b]/85 px-1.5 py-0.5 text-[9px] font-medium text-slate-200 backdrop-blur">{label}</span>
+      <span className="mt-1 max-w-32 truncate rounded bg-[#07101b]/85 px-1.5 py-0.5 text-[9px] font-medium text-slate-200 backdrop-blur">
+        {label}
+      </span>
     </div>
   )
 }

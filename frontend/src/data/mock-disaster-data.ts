@@ -17,6 +17,11 @@ export interface Incident {
   name: string
   location: string
   center: Coordinates
+  mapView: {
+    zoom: number
+    pitch: number
+    bearing: number
+  }
   updatedLabel: string
 }
 
@@ -99,6 +104,11 @@ export const incident: Incident = {
   name: "Blacksburg Flood Response",
   location: "Blacksburg, Virginia",
   center: [-80.414, 37.226],
+  mapView: {
+    zoom: 13.4,
+    pitch: 20,
+    bearing: -8,
+  },
   updatedLabel: "Updated 4 sec ago",
 }
 
