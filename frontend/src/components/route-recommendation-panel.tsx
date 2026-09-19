@@ -3,14 +3,25 @@ import { Clock3, Gauge, MapPinned, ShieldCheck } from "lucide-react"
 import type { RouteRecommendation } from "@/src/data/mock-disaster-data"
 
 interface RouteRecommendationPanelProps {
-  status: "idle" | "analyzing" | "complete"
-  recommendation: RouteRecommendation
+  status: "idle" | "analyzing" | "complete" | "error"
+  recommendation: RouteRecommendation | null
+  error: string
 }
 
 export function RouteRecommendationPanel({
   status,
   recommendation,
+  error,
 }: RouteRecommendationPanelProps) {
+  if (status === "error") {
+    return (
+      <section className="panel-section flex min-h-48 flex-col justify-center text-center" role="alert">
+        <h2 className="text-sm font-medium text-amber-200">Route analysis unavailable</h2>
+        <p className="mt-2 text-xs leading-5 text-slate-400">{error}</p>
+        <p className="mt-3 text-xs text-slate-500">Use Analyze route to retry.</p>
+      </section>
+    )
+  }
   if (status === "idle") {
     return (
       <section className="panel-section flex min-h-48 flex-col items-center justify-center text-center">
@@ -29,11 +40,13 @@ export function RouteRecommendationPanel({
     return (
       <section className="panel-section flex min-h-48 flex-col items-center justify-center text-center" aria-live="polite">
         <div className="analysis-spinner mb-4" />
-        <h2 className="text-sm font-medium text-slate-200">Analyzing route network</h2>
-        <p className="mt-2 text-xs text-slate-500">Comparing simulated hazards and access constraints…</p>
+        <h2 className="text-sm font-medium text-slate-200">Requesting mock route analysis</h2>
+        <p className="mt-2 text-xs text-slate-500">Waiting for the local route-analysis service…</p>
       </section>
     )
   }
+
+  if (!recommendation) return null
 
   return (
     <motion.section
@@ -45,12 +58,12 @@ export function RouteRecommendationPanel({
     >
       <div className="section-heading-row">
         <h2 className="section-label">Current recommendation</h2>
-        <span className="status-pill status-safe">Low risk</span>
+        <span className={`status-pill ${recommendation.risk === "LOW" ? "status-safe" : "text-amber-300"}`}>{recommendation.risk.toLowerCase()} risk</span>
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs text-slate-500">Safest route</p>
+          <p className="text-xs text-slate-500">Simulated recommendation</p>
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recommendation.routeName}</p>
         </div>
         <span className="mock-badge">Mock data</span>

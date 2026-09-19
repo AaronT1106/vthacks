@@ -188,3 +188,45 @@ Build the initial frontend-only DisasterLens dashboard and simulated route-analy
 - The local development server compiled the home page and returned HTTP 200.
 - The default Turbopack build could not complete in the sandbox because its CSS worker was not permitted to bind a local port; the Webpack production build passed instead.
 - Browser-based visual QA could not be completed because no browser connection was available in the session.
+
+---
+
+## Mock Route Analysis API Integration — 2026-09-19
+
+### Request
+
+Define a minimal route-analysis contract, implement one FastAPI POST endpoint, and connect the existing Analyze Route button and results panel while preserving the dashboard design and adding no dependencies.
+
+### Files Changed
+
+- `backend/main.py`: FastAPI application, validated request/response models, and `POST /api/analyze-route`.
+- `backend/mock_data.py`: existing role-specific demo metrics and supported location fixtures.
+- `backend/test_main.py`: endpoint and request-validation tests using unittest and the already available FastAPI TestClient/httpx.
+- `frontend/src/data/mock-disaster-data.ts`: request/response interfaces reusing existing responder, route, and recommendation types; removed local recommendation fixtures now owned by the backend.
+- `frontend/src/lib/route-analysis.ts`: POST request helper and HTTP error handling.
+- `frontend/next.config.ts`: same-origin API proxy to the backend, defaulting to `http://127.0.0.1:8000`, with optional server-side `BACKEND_URL`.
+- `frontend/src/components/disaster-dashboard.tsx`: actual request flow, loading/error states, 15-second timeout, cancellation, stale-result protection, and backend-driven change-feed entries.
+- `frontend/src/components/route-recommendation-panel.tsx`: response/error rendering and risk badge derived from the returned risk.
+- `frontend/src/components/disaster-map.tsx`: display returned route geometry in both map modes and align route endpoints with selected locations; retained existing map styling/layers.
+- `README.md`: API contract, backend startup, proxy configuration, and updated demo instructions.
+- `PROMPT_LOG.md`: this entry.
+
+### Contract and Decisions
+
+- Request fields: `startingPoint`, `destination`, and `responderType`, using the existing UI option IDs.
+- Response echoes the request and returns `dataSource: "mock"`, the existing `RouteRecommendation` structure, and a `Route` with `[longitude, latitude]` coordinates.
+- Both languages use the same camelCase field names. FastAPI rejects missing/extra fields, unsupported IDs/roles, wrong types, and malformed JSON with HTTP 422.
+- Role-specific metrics are preset values, not calculated journey estimates. Roles share illustrative corridor geometry; the selected destination determines the corridor and both endpoints match the request. Explanations identify the chosen locations and explicitly state mock limitations and human-verification requirements.
+- Input changes clear results and cancel in-flight requests. Failures are shown in the existing results panel, with retry through Analyze Route; no silent frontend fallback is used.
+- The Next.js rewrite avoids cross-origin browser requests and requires no CORS middleware. No dependencies or credentials were added. No real routing, live hazard analysis, LLM inference, or dispatch was implemented.
+
+### Validation
+
+- `python -m unittest -v` from `backend/`: passed three tests, covering all 20 supported journey/role combinations plus invalid fields, extra fields, malformed JSON, and method rejection.
+- Uvicorn imported the application and started successfully on `127.0.0.1:8000`; direct HTTP POST returned the expected mock response.
+- End-to-end HTTP check passed through the existing Next.js server at `localhost:3000` to FastAPI.
+- In-memory Node checks using the actual frontend request helper passed request serialization, response handling, HTTP 422/503 handling, and cancellation. React server rendering confirmed returned metrics, MEDIUM risk, mock labeling, explanation, and alert content in the existing panel.
+- `npm run lint`: passed.
+- `npm run build`: passed, including TypeScript and static generation. The sandboxed attempt compiled but hit `spawn EPERM` when starting the TypeScript worker; approved execution outside the sandbox succeeded.
+- `git diff --check`: passed.
+- Browser visual/interaction QA could not run because the computer-use inventory contained no connected browsers. Live HTTP and programmatic rendering checks were completed instead; mouse interaction and visual layout remain unverified in a browser.

@@ -220,15 +220,17 @@ Never commit the token or `.env.local` file.
 
 ### Frontend Demo
 
-All visible disaster information is clearly labeled mock data. The frontend does
-not call live APIs or calculate real emergency routes.
+All disaster information remains mock data. The frontend calls the local FastAPI
+backend for preset route analysis; it does not calculate real emergency routes.
+Run both servers before using Analyze route. Restart Next.js after changing its proxy configuration.
 
 1. Let the short globe introduction complete or select **Skip intro**.
 2. Choose a starting point, destination, and responder type.
-3. Select **Analyze route** to simulate a safer-route recommendation.
+3. Select **Analyze route** to request a mock recommendation from FastAPI.
 4. Toggle map layers to inspect hazards, risk, facilities, and routes.
 5. Select a flood or bridge-damage marker to inspect its evidence.
-6. Change responder type to see how the mock recommendation changes.
+6. Change responder type, then analyze again to see its preset mock recommendation.
+   Changing any selection clears the previous result and cancels an in-flight request.
 
 ### Backend
 
@@ -237,9 +239,49 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The backend startup command will be added after the FastAPI entry point is implemented.
+The frontend proxies `/api/analyze-route` to `http://127.0.0.1:8000`.
+For a different backend address, set `BACKEND_URL` in the frontend server's environment
+before starting/building Next.js. Browser requests use the same frontend origin;
+no CORS configuration is needed. Interactive API documentation: <http://127.0.0.1:8000/docs>.
+
+### Minimal Route Analysis Contract
+
+`POST /api/analyze-route`, with `Content-Type: application/json`:
+
+```json
+{
+  "startingPoint": "blacksburg-fire-station",
+  "destination": "lewisgale-hospital",
+  "responderType": "ambulance"
+}
+```
+
+- `startingPoint`: `blacksburg-fire-station` or `virginia-tech-rescue`.
+- `destination`: `lewisgale-hospital` or `blacksburg-shelter`.
+- `responderType`: `civilian`, `ambulance`, `firefighter`, `supply-vehicle`, or `emergency-coordinator`.
+- All fields are required. Arbitrary addresses/coordinates, unsupported values,
+  missing fields, extra fields, and malformed JSON return HTTP `422` with FastAPI's `detail` array.
+
+HTTP `200` returns:
+
+| Field | Contract |
+| --- | --- |
+| `startingPoint`, `destination`, `responderType` | Echo the validated request. |
+| `dataSource` | Always `"mock"`. |
+| `recommendation` | Existing `RouteRecommendation`: `role`, `routeName`, `travelTime` (e.g. `"8 min"`), `distance` (e.g. `"4.2 mi"`), `risk` (`LOW`, `MEDIUM`, `HIGH`), `confidence` (0–100), `priority`, `explanation`. |
+| `route` | Existing `Route`: `id`, `name`, `kind` (`"safe"` in this demo), and `coordinates` as `[longitude, latitude]` pairs, starting/ending at the selected locations. |
+
+Python and TypeScript use the same camelCase field names. `safe` is a demo display
+category, not a verified safety claim. Metrics are role-specific fixtures, not
+calculated for the selected journey; roles share illustrative corridor geometry.
+No road-network routing, live hazard analysis, LLM inference, or dispatch is performed.
+Human verification is required before operational use. Request failures are shown
+in the results panel with a retry instruction; there is no silent local-result fallback.
+
+Run backend checks from `backend/` with `python -m unittest -v`.
 
 ## Stretch Features
 
@@ -260,5 +302,5 @@ The backend startup command will be added after the FastAPI entry point is imple
 The frontend MVP includes the mission-control dashboard, mock hazard map,
 role-aware route recommendations, route explanations, map-layer controls, live
 source statuses, an operational change feed, and a short Three.js introduction.
-The backend environment is initialized but no backend application entry point
-has been created.
+The FastAPI backend now serves one validated mock route-analysis endpoint,
+connected to the existing dashboard, results panel, and map.

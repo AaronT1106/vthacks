@@ -20,22 +20,23 @@ import { ResponderModeSelector } from "@/src/components/responder-mode-selector"
 import { RouteRecommendationPanel } from "@/src/components/route-recommendation-panel"
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
 import { WhatChangedFeed } from "@/src/components/what-changed-feed"
+import { analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
   destinations,
   hazards,
   incident,
   initialChangeEvents,
-  recommendations,
   responderModes,
   startingLocations,
   type ChangeEvent,
   type Hazard,
   type MapLayerVisibility,
   type ResponderMode,
+  type RouteAnalysisResponse,
 } from "@/src/data/mock-disaster-data"
 
-type AnalysisStatus = "idle" | "analyzing" | "complete"
+type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
@@ -46,9 +47,10 @@ export function DisasterDashboard() {
   const [selectedHazard, setSelectedHazard] = useState<Hazard>(hazards[0])
   const [mapLayers, setMapLayers] = useState<MapLayerVisibility>(defaultMapLayers)
   const [changeEvents, setChangeEvents] = useState<ChangeEvent[]>(initialChangeEvents)
-  const analysisTimer = useRef<number | null>(null)
+  const [analysisResult, setAnalysisResult] = useState<RouteAnalysisResponse | null>(null)
+  const [analysisError, setAnalysisError] = useState("")
+  const activeRequest = useRef<AbortController | null>(null)
 
-  const recommendation = recommendations[responderMode]
   const selectedStartingLocation =
     startingLocations.find((location) => location.id === startingLocationId) ?? startingLocations[0]
   const selectedDestination =
@@ -56,7 +58,8 @@ export function DisasterDashboard() {
 
   useEffect(() => {
     return () => {
-      if (analysisTimer.current) window.clearTimeout(analysisTimer.current)
+      activeRequest.current?.abort()
+      activeRequest.current = null
     }
   }, [])
 
@@ -72,28 +75,59 @@ export function DisasterDashboard() {
   }
 
   function handleResponderChange(mode: ResponderMode) {
+    resetAnalysis()
     setResponderMode(mode)
   }
 
-  function handleAnalyzeRoute() {
-    if (analysisStatus === "analyzing") return
+  function resetAnalysis() {
+    activeRequest.current?.abort()
+    activeRequest.current = null
+    setAnalysisResult(null)
+    setAnalysisError("")
+    setAnalysisStatus("idle")
+  }
 
+  async function handleAnalyzeRoute() {
+    if (activeRequest.current) return
+    const controller = new AbortController()
+    activeRequest.current = controller
+    setAnalysisResult(null)
+    setAnalysisError("")
     setAnalysisStatus("analyzing")
-    analysisTimer.current = window.setTimeout(() => {
+    const timeout = window.setTimeout(() => controller.abort(), 15000)
+    try {
+      const result = await analyzeRoute({
+        startingPoint: startingLocationId,
+        destination: destinationId,
+        responderType: responderMode,
+      }, controller.signal)
+      if (activeRequest.current !== controller) return
+      setAnalysisResult(result)
       const selectedRole = responderModes.find((mode) => mode.id === responderMode)?.label ?? "Responder"
       const now = new Date()
       const newEvent: ChangeEvent = {
         id: `analysis-${now.getTime()}`,
         time: now.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        title: `${recommendations[responderMode].routeName} recommended`,
-        detail: `${selectedRole} priorities applied to the simulated network`,
+        title: `${result.recommendation.routeName} recommended (mock)`,
+        detail: `${selectedRole} mock analysis received from the backend`,
         tone: "safe",
       }
 
       setAnalysisStatus("complete")
       setSelectedHazard(hazards[0])
       setChangeEvents((currentEvents) => [newEvent, ...currentEvents])
-    }, 800)
+    } catch (error) {
+      if (activeRequest.current !== controller) return
+      setAnalysisStatus("error")
+      setAnalysisError(controller.signal.aborted
+        ? "Route analysis timed out. Please try again."
+        : error instanceof Error && error.name !== "TypeError"
+          ? error.message
+          : "Cannot reach route analysis. Check that the backend is running and try again.")
+    } finally {
+      window.clearTimeout(timeout)
+      if (activeRequest.current === controller) activeRequest.current = null
+    }
   }
 
   return (
@@ -152,7 +186,7 @@ export function DisasterDashboard() {
                       id="starting-point"
                       className="field-control"
                       value={startingLocationId}
-                      onChange={(event) => setStartingLocationId(event.target.value)}
+                      onChange={(event) => { resetAnalysis(); setStartingLocationId(event.target.value) }}
                     >
                       {startingLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
                     </select>
@@ -164,7 +198,7 @@ export function DisasterDashboard() {
                       id="destination"
                       className="field-control"
                       value={destinationId}
-                      onChange={(event) => setDestinationId(event.target.value)}
+                      onChange={(event) => { resetAnalysis(); setDestinationId(event.target.value) }}
                     >
                       {destinations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
                     </select>
@@ -203,6 +237,7 @@ export function DisasterDashboard() {
             <DisasterMap
               layers={mapLayers}
               analysisComplete={analysisStatus === "complete"}
+              recommendedRoute={analysisResult?.route ?? null}
               selectedHazardId={selectedHazard.id}
               onSelectHazard={handleHazardSelection}
               startingLocation={selectedStartingLocation}
@@ -212,7 +247,7 @@ export function DisasterDashboard() {
 
           <aside className="order-3 border-t border-white/[0.07] bg-[#080c13] xl:overflow-y-auto xl:border-l xl:border-t-0">
             <div className="space-y-3 p-3">
-              <RouteRecommendationPanel status={analysisStatus} recommendation={recommendation} />
+              <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} />
               <DamageDetailsPanel hazard={selectedHazard} />
               <WhatChangedFeed events={changeEvents} />
               <div className="xl:hidden"><LiveDataSources /></div>

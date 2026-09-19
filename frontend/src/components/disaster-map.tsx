@@ -13,11 +13,14 @@ import {
   type Hazard,
   type LocationOption,
   type MapLayerVisibility,
+  type Route,
+  type Coordinates,
 } from "@/src/data/mock-disaster-data"
 
 interface DisasterMapProps {
   layers: MapLayerVisibility
   analysisComplete: boolean
+  recommendedRoute: Route | null
   selectedHazardId: string
   onSelectHazard: (hazard: Hazard) => void
   startingLocation: LocationOption
@@ -27,7 +30,6 @@ interface DisasterMapProps {
 const floodHazard = hazards.find((hazard) => hazard.type === "flooding")!
 const bridgeHazard = hazards.find((hazard) => hazard.type === "bridge-damage")!
 const unsafeRoute = routes.find((route) => route.kind === "unsafe")!
-const safeRoute = routes.find((route) => route.kind === "safe")!
 
 function polygonCollection(hazard: Hazard): FeatureCollection<Polygon> {
   return {
@@ -69,6 +71,7 @@ function routeCollection(coordinates: Array<[number, number]>): FeatureCollectio
 export function DisasterMap({
   layers,
   analysisComplete,
+  recommendedRoute,
   selectedHazardId,
   onSelectHazard,
   startingLocation,
@@ -146,7 +149,9 @@ export function DisasterMap({
           },
         })
 
-        map.addSource("unsafe-route", { type: "geojson", data: routeCollection(unsafeRoute.coordinates) })
+        map.addSource("unsafe-route", { type: "geojson", data: routeCollection([
+          startingLocation.coordinates, ...unsafeRoute.coordinates.slice(1, -1), destination.coordinates,
+        ]) })
         map.addLayer({
           id: "unsafe-route-line",
           type: "line",
@@ -155,7 +160,7 @@ export function DisasterMap({
           paint: { "line-color": "#fb7185", "line-width": 4, "line-opacity": 0.55, "line-dasharray": [1.5, 1.5] },
         })
 
-        map.addSource("safe-route", { type: "geojson", data: routeCollection(safeRoute.coordinates) })
+        map.addSource("safe-route", { type: "geojson", data: routeCollection(recommendedRoute?.coordinates ?? []) })
         map.addLayer({
           id: "safe-route-line-shadow",
           type: "line",
@@ -218,7 +223,7 @@ export function DisasterMap({
       disposed = true
       map?.remove()
     }
-  }, [analysisComplete, destination, layers, mapFailed, mapboxToken, onSelectHazard, selectedHazardId, startingLocation])
+  }, [analysisComplete, destination, layers, mapFailed, mapboxToken, onSelectHazard, recommendedRoute, selectedHazardId, startingLocation])
 
   const useFallback = !mapboxToken || mapFailed
 
@@ -228,6 +233,7 @@ export function DisasterMap({
         <FallbackMap
           layers={layers}
           analysisComplete={analysisComplete}
+          recommendedRoute={recommendedRoute}
           selectedHazardId={selectedHazardId}
           onSelectHazard={onSelectHazard}
           startingLocation={startingLocation}
@@ -240,7 +246,7 @@ export function DisasterMap({
       <div className="pointer-events-none absolute left-4 top-4 z-10 flex flex-wrap items-center gap-2">
         <span className="mock-badge border-amber-400/20 bg-amber-400/10 text-amber-200">Mock data</span>
         <span className="rounded-md border border-white/10 bg-[#07101b]/85 px-2 py-1 text-[10px] text-slate-400 backdrop-blur">
-          {useFallback ? "Local demo map" : "Mapbox live canvas"}
+          {useFallback ? "Local schematic map" : "Mapbox live canvas"} · Illustrative routes
         </span>
       </div>
 
@@ -265,17 +271,19 @@ function Legend({ color, label, dashed = false }: { color: string; label: string
 function FallbackMap({
   layers,
   analysisComplete,
+  recommendedRoute,
   selectedHazardId,
   onSelectHazard,
   startingLocation,
   destination,
 }: DisasterMapProps) {
-  const startPosition = startingLocation.id === "virginia-tech-rescue" ? "left-[22%] top-[32%]" : "left-[27%] top-[22%]"
-  const destinationPosition = destination.id === "blacksburg-shelter" ? "left-[73%] top-[47%]" : "left-[72%] top-[78%]"
+  const routePoints = recommendedRoute?.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
+  const startPoint = projectDemoPoint(startingLocation.coordinates)
+  const endPoint = projectDemoPoint(destination.coordinates)
 
   return (
     <div className={`absolute inset-0 ${layers.satellite ? "fallback-map-satellite" : "fallback-map"}`}>
-      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 900 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 900 700" preserveAspectRatio="none" aria-hidden="true">
         <g className="fallback-roads" fill="none" strokeLinecap="round">
           <path d="M-40 170 C170 135 250 230 430 210 S690 85 950 160" strokeWidth="7" />
           <path d="M80 760 C180 580 260 510 400 390 S600 185 730 -30" strokeWidth="10" />
@@ -291,12 +299,12 @@ function FallbackMap({
         </g>
         {layers.risk && <ellipse cx="492" cy="360" rx="150" ry="105" fill="#f97316" opacity="0.1" />}
         {analysisComplete && (
-          <path d="M250 170 C335 238 395 280 490 360 S570 470 655 565" fill="none" stroke="#fb7185" strokeWidth="6" strokeDasharray="12 12" opacity="0.58" />
+          <polyline points={[startPoint, projectDemoPoint(floodHazard.coordinates), endPoint].map((point) => point.join(",")).join(" ")} fill="none" stroke="#fb7185" strokeWidth="6" strokeDasharray="12 12" opacity="0.58" />
         )}
-        {analysisComplete && layers.safeRoute && (
+        {analysisComplete && layers.safeRoute && recommendedRoute && (
           <>
-            <path d="M250 170 C165 260 185 435 305 520 S520 610 655 565" fill="none" stroke="#07384a" strokeWidth="14" strokeLinecap="round" />
-            <path d="M250 170 C165 260 185 435 305 520 S520 610 655 565" fill="none" stroke="#22d3ee" strokeWidth="6" strokeLinecap="round" />
+            <polyline points={routePoints} fill="none" stroke="#07384a" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
+            <polyline points={routePoints} fill="none" stroke="#22d3ee" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
           </>
         )}
         {layers.flooding && (
@@ -307,8 +315,8 @@ function FallbackMap({
         )}
       </svg>
 
-      <MapMarker className={startPosition} label={startingLocation.name} icon={Navigation} tone="bg-slate-100 text-slate-950" />
-      <MapMarker className={destinationPosition} label={destination.name} icon={MapPin} tone="bg-sky-400 text-slate-950" />
+      <MapMarker point={startPoint} label={startingLocation.name} icon={Navigation} tone="bg-slate-100 text-slate-950" />
+      <MapMarker point={endPoint} label={destination.name} icon={MapPin} tone="bg-sky-400 text-slate-950" />
       {layers.hospitals && <MapMarker className="left-[76%] top-[70%]" label="Hospital" icon={Building2} tone="bg-sky-500 text-white" />}
       {layers.shelters && <MapMarker className="left-[73%] top-[31%]" label="Shelter" icon={TentTree} tone="bg-emerald-500 text-white" />}
       {layers.shelters && <MapMarker className="left-[39%] top-[66%]" label="Shelter" icon={TentTree} tone="bg-emerald-500 text-white" />}
@@ -344,21 +352,28 @@ function FallbackMap({
 
 function MapMarker({
   className,
+  point,
   label,
   icon: Icon,
   tone,
 }: {
-  className: string
+  className?: string
+  point?: Coordinates
   label: string
   icon: typeof MapPin
   tone: string
 }) {
   return (
-    <div className={`pointer-events-none absolute z-[2] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${className}`}>
+    <div style={point ? { left: `${point[0] / 9}%`, top: `${point[1] / 7}%` } : undefined} className={`pointer-events-none absolute z-[2] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center ${className ?? ""}`}>
       <span className={`grid size-7 place-items-center rounded-full border-2 border-[#07101b] shadow-lg ${tone}`}>
         <Icon className="size-3.5" />
       </span>
       <span className="mt-1 rounded bg-[#07101b]/85 px-1.5 py-0.5 text-[9px] font-medium text-slate-200 backdrop-blur">{label}</span>
     </div>
   )
+}
+
+// Project backend geometry into the fallback's illustrative coordinate space.
+function projectDemoPoint([longitude, latitude]: Coordinates): Coordinates {
+  return [((longitude + 80.433) / 0.038) * 900, ((37.239 - latitude) / 0.036) * 700]
 }

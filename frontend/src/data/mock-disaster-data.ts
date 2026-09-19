@@ -59,6 +59,18 @@ export interface RouteRecommendation {
   explanation: string
 }
 
+export interface RouteAnalysisRequest {
+  startingPoint: string
+  destination: string
+  responderType: ResponderMode
+}
+
+export interface RouteAnalysisResponse extends RouteAnalysisRequest {
+  dataSource: "mock"
+  recommendation: RouteRecommendation
+  route: Route
+}
+
 export interface MapLayerVisibility {
   flooding: boolean
   bridgeDamage: boolean
@@ -220,64 +232,6 @@ export const routes: Route[] = [
     ],
   },
 ]
-
-export const recommendations: Record<ResponderMode, RouteRecommendation> = {
-  civilian: {
-    role: "civilian",
-    routeName: "Route C",
-    travelTime: "11 min",
-    distance: "4.8 mi",
-    risk: "LOW",
-    confidence: 96,
-    priority: "Minimum hazard exposure",
-    explanation:
-      "Route C keeps the greatest distance from the flooded corridor and avoids the damaged bridge. It adds 5 minutes but provides the lowest estimated exposure for civilian travel.",
-  },
-  ambulance: {
-    role: "ambulance",
-    routeName: "Route B",
-    travelTime: "8 min",
-    distance: "4.2 mi",
-    risk: "LOW",
-    confidence: 94,
-    priority: "Fast, reliable hospital access",
-    explanation:
-      "Route 460 was avoided because simulated flooding intersects the original route. Route B adds 3 minutes but preserves emergency access to LewisGale Hospital with substantially lower hazard exposure.",
-  },
-  firefighter: {
-    role: "firefighter",
-    routeName: "Route B",
-    travelTime: "7 min",
-    distance: "4.2 mi",
-    risk: "LOW",
-    confidence: 91,
-    priority: "Emergency vehicle access",
-    explanation:
-      "Route B avoids standing water and maintains wider turns for emergency apparatus. The south bridge corridor remains excluded pending structural verification.",
-  },
-  "supply-vehicle": {
-    role: "supply-vehicle",
-    routeName: "Route D",
-    travelTime: "14 min",
-    distance: "6.1 mi",
-    risk: "LOW",
-    confidence: 89,
-    priority: "Heavy vehicle clearance",
-    explanation:
-      "Route D avoids both the flood zone and the bridge with simulated structural damage. The longer corridor is rated for larger vehicles and minimizes restricted turns.",
-  },
-  "emergency-coordinator": {
-    role: "emergency-coordinator",
-    routeName: "Route B + network view",
-    travelTime: "8 min",
-    distance: "4.2 mi",
-    risk: "MEDIUM",
-    confidence: 92,
-    priority: "Infrastructure-wide awareness",
-    explanation:
-      "Route B is the strongest current option, while Route 460 and the South Main bridge remain operational concerns. Continue monitoring both corridors before directing additional resources.",
-  },
-}
 
 export const initialChangeEvents: ChangeEvent[] = [
   {
