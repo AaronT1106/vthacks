@@ -677,3 +677,69 @@ Add a mock hazard-evidence review workflow with before/after placeholders and lo
 - `npm run lint`: passed.
 - `npm run build`: passed, including TypeScript and static generation.
 - `git diff --check`: passed before this log entry; line-ending warnings were informational.
+
+---
+
+## Polished 3D Disaster-Area Selection Map — 2026-09-19
+
+### Request
+
+Improve only the initial disaster-area selection map with restrained 3D presentation, complete Mapbox navigation, clearer drawing behavior, and no changes to search, fallback, dashboard, backend, or dependencies.
+
+### Files Changed
+
+- `frontend/src/components/disaster-area-selection-map.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Initialized the area map from the centralized incident zoom, pitch, and bearing instead of forcing a flat camera.
+- Enabled the compact Mapbox compass/pitch control and made Recenter restore the complete Blacksburg camera.
+- Added a conditional, understated building-extrusion layer when the active Mapbox style exposes building data; unsupported styles continue normally.
+- Kept search on the persistent map instance and changed its movement to a smooth `flyTo` without resetting pitch or bearing.
+- Explicitly enabled all normal navigation handlers outside drawing mode and disabled conflicting pan, zoom, rotate, tilt, box-zoom, double-click, keyboard, and touch gestures while drawing.
+- Strengthened the selected-area fill and outline slightly in both Mapbox and fallback renderers.
+- Preserved the existing drawable no-token fallback and all bounds state and confirmation behavior.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- `npm run dev`: started successfully after sandbox permission was granted.
+- Browser visual and pointer-interaction checks remain pending because no connected browser was available in this session.
+- No backend, dependency manifest, environment, intro, dashboard, or unrelated UI files were changed.
+
+---
+
+## Real 3D Mapbox Disaster-Area Selection — 2026-09-19
+
+### Request
+
+Upgrade only the initial disaster-area map from a tilted basemap to a real Mapbox GL JS 3D environment with terrain, restrained atmosphere, compatible building extrusion, full navigation, and accurate top-down bounds drawing.
+
+### Files Changed
+
+- `frontend/src/components/disaster-area-selection-map.tsx`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Confirmed the installed `mapbox-gl` 3.31.0 types expose raster DEM sources, terrain, fog, terrain elevation, and terrain-aware extrusion properties.
+- Added the Mapbox Terrain DEM source, `1.15` terrain exaggeration, and muted hillshade so elevation supplies the primary visible depth.
+- Added restrained dark fog and increased the area map's initial camera to a 50-degree pitch and -18-degree bearing while preserving the existing dark-v11 style and persistent map instance.
+- Kept the conditional composite-source building layer, aligned supported extrusion heights and bases to terrain, and retained labels above buildings.
+- Kept normal pan, zoom, rotate, tilt, keyboard, touch, compass, recenter, and same-instance search navigation.
+- Drawing mode now saves the explored camera, transitions north-up and top-down before accepting pointer input, disables conflicting navigation, and restores the saved 3D camera after completion or cancellation.
+- Search during selection remains top-down and updates the camera that will be restored afterward.
+- Terrain-specific failures are nonfatal; missing or invalid basemap authentication still uses the existing drawable demo fallback.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- The configured token received HTTP 200 from the Mapbox Terrain DEM TileJSON endpoint without being printed or modified.
+- The existing development server compiled the changes and returned HTTP 200.
+- Browser visual checks for terrain relief, building coverage, camera interaction, and pointer drawing remain pending because no connected browser was available.
+- No backend, dependency manifest, environment value, shared type, intro, dashboard, or unrelated UI files were changed.

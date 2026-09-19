@@ -20,10 +20,25 @@ interface DisasterAreaSelectionMapProps {
 }
 
 const DARK_MAP_STYLE = "mapbox://styles/mapbox/dark-v11"
+const TERRAIN_SOURCE_ID = "area-selection-terrain"
+const TERRAIN_EXAGGERATION = 1.15
+const AREA_MAP_PITCH = 50
+const AREA_MAP_BEARING = -18
 const FALLBACK_WEST = -80.433
 const FALLBACK_EAST = -80.395
 const FALLBACK_NORTH = 37.239
 const FALLBACK_SOUTH = 37.203
+
+function setNavigationEnabled(map: MapboxMap, enabled: boolean) {
+  const action = enabled ? "enable" : "disable"
+  map.dragPan[action]()
+  map.scrollZoom[action]()
+  map.boxZoom[action]()
+  map.dragRotate[action]()
+  map.doubleClickZoom[action]()
+  map.keyboard[action]()
+  map.touchZoomRotate[action]()
+}
 
 function boundsFromCorners(first: Coordinates, second: Coordinates): DisasterAreaBounds {
   return {
@@ -90,13 +105,13 @@ function addSelectionLayer(map: MapboxMap, bounds: DisasterAreaBounds | null) {
       id: "selected-disaster-area-fill",
       type: "fill",
       source: "selected-disaster-area",
-      paint: { "fill-color": "#22d3ee", "fill-opacity": 0.16 },
+      paint: { "fill-color": "#22d3ee", "fill-opacity": 0.2 },
     })
     map.addLayer({
       id: "selected-disaster-area-outline",
       type: "line",
       source: "selected-disaster-area",
-      paint: { "line-color": "#67e8f9", "line-width": 2 },
+      paint: { "line-color": "#a5f3fc", "line-opacity": 0.95, "line-width": 2.5 },
     })
   }
   if (!map.getSource("searched-location")) {
@@ -115,6 +130,81 @@ function addSelectionLayer(map: MapboxMap, bounds: DisasterAreaBounds | null) {
   }
 }
 
+function addBuildingLayer(map: MapboxMap) {
+  if (map.getLayer("area-selection-3d-buildings")) return
+  const style = map.getStyle()
+  if (!style.sources?.composite) return
+  const labelLayer = style.layers?.find(
+    (layer) => layer.type === "symbol" && "layout" in layer && layer.layout?.["text-field"],
+  )
+  try {
+    map.addLayer({
+      id: "area-selection-3d-buildings",
+      source: "composite",
+      "source-layer": "building",
+      type: "fill-extrusion",
+      minzoom: 13.5,
+      filter: ["==", "extrude", "true"],
+      paint: {
+        "fill-extrusion-color": "#182433",
+        "fill-extrusion-height": ["get", "height"],
+        "fill-extrusion-base": ["get", "min_height"],
+        "fill-extrusion-height-alignment": "terrain",
+        "fill-extrusion-base-alignment": "terrain",
+        "fill-extrusion-opacity": 0.55,
+      },
+    }, labelLayer?.id)
+  } catch {
+    // Some Mapbox styles do not expose building data; the map remains fully usable without it.
+  }
+}
+
+function addTerrain(map: MapboxMap) {
+  try {
+    if (!map.getSource(TERRAIN_SOURCE_ID)) {
+      map.addSource(TERRAIN_SOURCE_ID, {
+        type: "raster-dem",
+        url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+        tileSize: 512,
+        maxzoom: 14,
+      })
+    }
+    map.setTerrain({ source: TERRAIN_SOURCE_ID, exaggeration: TERRAIN_EXAGGERATION })
+    if (!map.getLayer("area-selection-hillshade")) {
+      const labelLayer = map.getStyle().layers?.find(
+        (layer) => layer.type === "symbol" && "layout" in layer && layer.layout?.["text-field"],
+      )
+      map.addLayer({
+        id: "area-selection-hillshade",
+        type: "hillshade",
+        source: TERRAIN_SOURCE_ID,
+        paint: {
+          "hillshade-exaggeration": 0.22,
+          "hillshade-shadow-color": "#020617",
+          "hillshade-highlight-color": "#334155",
+          "hillshade-accent-color": "#0f172a",
+        },
+      }, labelLayer?.id)
+    }
+  } catch {
+    // Terrain is an enhancement; the Mapbox basemap remains usable when DEM data is unavailable.
+  }
+}
+
+function addAtmosphere(map: MapboxMap) {
+  try {
+    map.setFog({
+      color: "#0b1220",
+      "high-color": "#1e293b",
+      "horizon-blend": 0.08,
+      "space-color": "#05080e",
+      "star-intensity": 0,
+    })
+  } catch {
+    // Fog support can vary by style and projection; it is not required for map interaction.
+  }
+}
+
 function setSelectionData(map: MapboxMap | null, bounds: DisasterAreaBounds | null) {
   const source = map?.getSource("selected-disaster-area") as GeoJSONSource | undefined
   source?.setData(boundsCollection(bounds))
@@ -126,6 +216,18 @@ function isAuthenticationError(error: Error) {
   return status === 401 || status === 403 || message.includes("token") || message.includes("unauthorized")
 }
 
+function isTerrainError(error: Error) {
+  const message = error.message.toLowerCase()
+  return message.includes("terrain-dem") || message.includes(TERRAIN_SOURCE_ID)
+}
+
+interface SavedCamera {
+  center: Coordinates
+  zoom: number
+  pitch: number
+  bearing: number
+}
+
 export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
   const { bounds, focusPlace, selectionEnabled } = props
   const container = useRef<HTMLDivElement>(null)
@@ -133,19 +235,49 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
   const mapboxLibrary = useRef<typeof import("mapbox-gl").default | null>(null)
   const locationPopup = useRef<Popup | null>(null)
   const startCorner = useRef<Coordinates | null>(null)
+  const savedCamera = useRef<SavedCamera | null>(null)
+  const selectionModeActive = useRef(false)
+  const drawingReadyRef = useRef(false)
   const currentProps = useRef(props)
   const [mapReady, setMapReady] = useState(false)
   const [mapFailed, setMapFailed] = useState(false)
+  const [drawingReady, setDrawingReady] = useState(false)
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
 
   useEffect(() => {
     currentProps.current = props
     setSelectionData(map.current, bounds)
     if (map.current) {
-      map.current.getCanvas().style.cursor = selectionEnabled ? "crosshair" : "grab"
-      if (!selectionEnabled) {
-        startCorner.current = null
-        map.current.dragPan.enable()
+      const activeMap = map.current
+      activeMap.getCanvas().style.cursor = selectionEnabled ? "crosshair" : "grab"
+      startCorner.current = null
+      setNavigationEnabled(activeMap, !selectionEnabled)
+      if (selectionEnabled && !selectionModeActive.current) {
+        const center = activeMap.getCenter()
+        savedCamera.current = {
+          center: [center.lng, center.lat],
+          zoom: activeMap.getZoom(),
+          pitch: activeMap.getPitch(),
+          bearing: activeMap.getBearing(),
+        }
+        selectionModeActive.current = true
+        drawingReadyRef.current = false
+        setDrawingReady(false)
+        activeMap.stop()
+        activeMap.easeTo({ pitch: 0, bearing: 0, duration: 400 })
+        activeMap.once("moveend", () => {
+          if (!currentProps.current.selectionEnabled) return
+          drawingReadyRef.current = true
+          setDrawingReady(true)
+        })
+      } else if (!selectionEnabled && selectionModeActive.current) {
+        selectionModeActive.current = false
+        drawingReadyRef.current = false
+        setDrawingReady(false)
+        activeMap.stop()
+        const previousCamera = savedCamera.current
+        savedCamera.current = null
+        if (previousCamera) activeMap.easeTo({ ...previousCamera, duration: 400 })
       }
     }
   }, [bounds, props, selectionEnabled])
@@ -170,33 +302,53 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
           style: DARK_MAP_STYLE,
           center: incident.center,
           zoom: incident.mapView.zoom,
-          pitch: 0,
-          bearing: 0,
+          pitch: AREA_MAP_PITCH,
+          bearing: AREA_MAP_BEARING,
           attributionControl: false,
         })
         map.current = initializedMap
-        initializedMap.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "bottom-left")
+        initializedMap.addControl(
+          new mapboxgl.NavigationControl({ showCompass: true, visualizePitch: true }),
+          "bottom-left",
+        )
         initializedMap.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right")
         loadTimeout = window.setTimeout(() => {
           if (!disposed && !styleLoaded) setMapFailed(true)
         }, 8000)
         initializedMap.on("error", (event) => {
-          if (isAuthenticationError(event.error)) setMapFailed(true)
+          if (!isTerrainError(event.error) && isAuthenticationError(event.error)) setMapFailed(true)
         })
         initializedMap.once("style.load", () => {
           if (!initializedMap || disposed) return
           styleLoaded = true
           if (loadTimeout !== null) window.clearTimeout(loadTimeout)
+          addTerrain(initializedMap)
+          addAtmosphere(initializedMap)
+          addBuildingLayer(initializedMap)
           addSelectionLayer(initializedMap, currentProps.current.bounds)
+          setNavigationEnabled(initializedMap, !currentProps.current.selectionEnabled)
+          initializedMap.getCanvas().style.cursor = currentProps.current.selectionEnabled ? "crosshair" : "grab"
+          if (currentProps.current.selectionEnabled) {
+            const center = initializedMap.getCenter()
+            savedCamera.current = {
+              center: [center.lng, center.lat],
+              zoom: initializedMap.getZoom(),
+              pitch: initializedMap.getPitch(),
+              bearing: initializedMap.getBearing(),
+            }
+            selectionModeActive.current = true
+            initializedMap.jumpTo({ pitch: 0, bearing: 0 })
+            drawingReadyRef.current = true
+            setDrawingReady(true)
+          }
           setMapReady(true)
           initializedMap.resize()
           resizeFrame = window.requestAnimationFrame(() => initializedMap?.resize())
         })
 
         const beginSelection = (coordinates: Coordinates) => {
-          if (!currentProps.current.selectionEnabled || !initializedMap) return
+          if (!currentProps.current.selectionEnabled || !drawingReadyRef.current || !initializedMap) return
           startCorner.current = coordinates
-          initializedMap.dragPan.disable()
           setSelectionData(initializedMap, null)
         }
         const updateSelection = (coordinates: Coordinates) => {
@@ -207,7 +359,6 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
           if (!startCorner.current || !initializedMap) return
           const nextBounds = boundsFromCorners(startCorner.current, coordinates)
           startCorner.current = null
-          initializedMap.dragPan.enable()
           if (isValidBounds(nextBounds)) {
             currentProps.current.onBoundsChange(nextBounds)
             currentProps.current.onSelectionComplete()
@@ -247,7 +398,30 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
     locationPopup.current?.remove()
     locationPopup.current = null
     if (!focusPlace || !mapboxLibrary.current) return
-    map.current.easeTo({ center: [focusPlace.longitude, focusPlace.latitude], zoom: 13.5, duration: 650 })
+    const drawing = currentProps.current.selectionEnabled
+    if (drawing) {
+      drawingReadyRef.current = false
+      setDrawingReady(false)
+      if (savedCamera.current) {
+        savedCamera.current.center = [focusPlace.longitude, focusPlace.latitude]
+        savedCamera.current.zoom = 13.5
+      }
+    }
+    map.current.stop()
+    map.current.flyTo({
+      center: [focusPlace.longitude, focusPlace.latitude],
+      zoom: 13.5,
+      pitch: drawing ? 0 : Math.max(map.current.getPitch(), AREA_MAP_PITCH),
+      bearing: drawing ? 0 : map.current.getBearing(),
+      duration: 750,
+    })
+    if (drawing) {
+      map.current.once("moveend", () => {
+        if (!currentProps.current.selectionEnabled) return
+        drawingReadyRef.current = true
+        setDrawingReady(true)
+      })
+    }
     locationPopup.current = new mapboxLibrary.current.Popup({
       closeButton: false,
       closeOnMove: false,
@@ -279,13 +453,21 @@ export function DisasterAreaSelectionMap(props: DisasterAreaSelectionMapProps) {
         {useFallback
           ? selectionEnabled ? "Demo map · Drag to draw the analysis area" : "Demo map"
           : !mapReady ? "Loading Mapbox…"
-            : selectionEnabled ? "Drag to draw the analysis area" : "Pan and zoom to position the map"}
+            : selectionEnabled
+              ? drawingReady ? "Drag to draw the analysis area" : "Preparing top-down selection view…"
+              : "Pan, zoom, rotate, and tilt to explore"}
       </div>
-      {!useFallback && mapReady && (
+      {!useFallback && mapReady && !selectionEnabled && (
         <button
           type="button"
           className="area-map-recenter"
-          onClick={() => map.current?.easeTo({ center: incident.center, zoom: incident.mapView.zoom, duration: 650 })}
+          onClick={() => map.current?.easeTo({
+            center: incident.center,
+            zoom: incident.mapView.zoom,
+            pitch: AREA_MAP_PITCH,
+            bearing: AREA_MAP_BEARING,
+            duration: 650,
+          })}
           aria-label="Recenter map on Blacksburg"
         >
           <LocateFixed className="size-4" />
@@ -367,7 +549,7 @@ function FallbackAreaMap({
           <path d="M175 -30 C220 160 330 250 510 300 S780 335 950 270" strokeWidth="5" />
         </g>
         {rect && (
-          <rect {...rect} fill="#22d3ee" fillOpacity="0.16" stroke="#67e8f9" strokeWidth="3" />
+          <rect {...rect} fill="#22d3ee" fillOpacity="0.2" stroke="#a5f3fc" strokeWidth="3" />
         )}
       </svg>
     </div>
