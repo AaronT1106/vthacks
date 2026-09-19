@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import {
   Activity,
@@ -13,9 +13,11 @@ import {
   Route as RouteIcon,
 } from "lucide-react"
 import { DamageDetailsPanel } from "@/src/components/damage-details-panel"
+import { DestinationTypeSelector } from "@/src/components/destination-type-selector"
 import { DisasterMap } from "@/src/components/disaster-map"
 import { LiveDataSources } from "@/src/components/live-data-sources"
 import { MapLayerControls } from "@/src/components/map-layer-controls"
+import { PlaceSearchInput } from "@/src/components/place-search-input"
 import { ResponderModeSelector } from "@/src/components/responder-mode-selector"
 import { RouteRecommendationPanel } from "@/src/components/route-recommendation-panel"
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
@@ -27,13 +29,17 @@ import {
   hazards,
   incident,
   initialChangeEvents,
+  locationOptionToSelectedPlace,
   responderModes,
   startingLocations,
   type ChangeEvent,
+  type Coordinates,
+  type DestinationType,
   type Hazard,
   type MapLayerVisibility,
   type ResponderMode,
   type RouteAnalysisResponse,
+  type SelectedPlace,
 } from "@/src/data/mock-disaster-data"
 
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
@@ -41,8 +47,13 @@ type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
-  const [startingLocationId, setStartingLocationId] = useState(startingLocations[0].id)
-  const [destinationId, setDestinationId] = useState(destinations[0].id)
+  const [startingPlace, setStartingPlace] = useState<SelectedPlace | null>(() =>
+    locationOptionToSelectedPlace(startingLocations[0], "fire station"),
+  )
+  const [destinationPlace, setDestinationPlace] = useState<SelectedPlace | null>(() =>
+    locationOptionToSelectedPlace(destinations[0], "hospital"),
+  )
+  const [destinationType, setDestinationType] = useState<DestinationType>("hospital")
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle")
   const [selectedHazard, setSelectedHazard] = useState<Hazard>(hazards[0])
   const [mapLayers, setMapLayers] = useState<MapLayerVisibility>(defaultMapLayers)
@@ -51,10 +62,12 @@ export function DisasterDashboard() {
   const [analysisError, setAnalysisError] = useState("")
   const activeRequest = useRef<AbortController | null>(null)
 
-  const selectedStartingLocation =
-    startingLocations.find((location) => location.id === startingLocationId) ?? startingLocations[0]
-  const selectedDestination =
-    destinations.find((location) => location.id === destinationId) ?? destinations[0]
+  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
+  const searchProximity = useMemo<Coordinates>(() => startingPlace
+    ? [startingPlace.longitude, startingPlace.latitude]
+    : incident.center,
+  [startingPlace])
+  const canAnalyzeRoute = Boolean(startingPlace?.presetId && destinationPlace?.presetId)
 
   useEffect(() => {
     return () => {
@@ -79,6 +92,22 @@ export function DisasterDashboard() {
     setResponderMode(mode)
   }
 
+  function handleStartingPlaceChange(place: SelectedPlace | null) {
+    resetAnalysis()
+    setStartingPlace(place)
+  }
+
+  function handleDestinationPlaceChange(place: SelectedPlace | null) {
+    resetAnalysis()
+    setDestinationPlace(place)
+  }
+
+  function handleDestinationTypeChange(type: DestinationType) {
+    resetAnalysis()
+    setDestinationType(type)
+    setDestinationPlace(null)
+  }
+
   function resetAnalysis() {
     activeRequest.current?.abort()
     activeRequest.current = null
@@ -88,7 +117,7 @@ export function DisasterDashboard() {
   }
 
   async function handleAnalyzeRoute() {
-    if (activeRequest.current) return
+    if (activeRequest.current || !startingPlace?.presetId || !destinationPlace?.presetId) return
     const controller = new AbortController()
     activeRequest.current = controller
     setAnalysisResult(null)
@@ -97,8 +126,8 @@ export function DisasterDashboard() {
     const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
       const result = await analyzeRoute({
-        startingPoint: startingLocationId,
-        destination: destinationId,
+        startingPoint: startingPlace.presetId,
+        destination: destinationPlace.presetId,
         responderType: responderMode,
       }, controller.signal)
       if (activeRequest.current !== controller) return
@@ -180,29 +209,74 @@ export function DisasterDashboard() {
                 </div>
 
                 <div className="mt-4 space-y-4">
-                  <div className="space-y-2">
-                    <label className="field-label" htmlFor="starting-point">Starting point</label>
-                    <select
-                      id="starting-point"
-                      className="field-control"
-                      value={startingLocationId}
-                      onChange={(event) => { resetAnalysis(); setStartingLocationId(event.target.value) }}
-                    >
-                      {startingLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-                    </select>
-                  </div>
+                  {mapboxToken ? (
+                    <>
+                      <PlaceSearchInput
+                        id="starting-point"
+                        label="Starting point"
+                        placeholder="Search address or place..."
+                        accessToken={mapboxToken}
+                        proximity={incident.center}
+                        value={startingPlace}
+                        onChange={handleStartingPlaceChange}
+                      />
 
-                  <div className="space-y-2">
-                    <label className="field-label" htmlFor="destination">Destination</label>
-                    <select
-                      id="destination"
-                      className="field-control"
-                      value={destinationId}
-                      onChange={(event) => { resetAnalysis(); setDestinationId(event.target.value) }}
-                    >
-                      {destinations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-                    </select>
-                  </div>
+                      <DestinationTypeSelector
+                        value={destinationType}
+                        onChange={handleDestinationTypeChange}
+                      />
+
+                      <PlaceSearchInput
+                        key={destinationType}
+                        id="destination"
+                        label="Destination"
+                        placeholder={destinationType === "custom"
+                          ? "Search place or address..."
+                          : `Search nearby ${destinationType.replaceAll("-", " ")}s...`}
+                        accessToken={mapboxToken}
+                        proximity={searchProximity}
+                        value={destinationPlace}
+                        onChange={handleDestinationPlaceChange}
+                        destinationType={destinationType}
+                        showNearby
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <label className="field-label" htmlFor="starting-point">Starting point</label>
+                        <select
+                          id="starting-point"
+                          className="field-control"
+                          value={startingPlace?.presetId ?? ""}
+                          onChange={(event) => {
+                            const location = startingLocations.find((item) => item.id === event.target.value)
+                            if (location) handleStartingPlaceChange(locationOptionToSelectedPlace(location, "fire station"))
+                          }}
+                        >
+                          {startingLocations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="field-label" htmlFor="destination">Destination</label>
+                        <select
+                          id="destination"
+                          className="field-control"
+                          value={destinationPlace?.presetId ?? ""}
+                          onChange={(event) => {
+                            const location = destinations.find((item) => item.id === event.target.value)
+                            if (location) handleDestinationPlaceChange(locationOptionToSelectedPlace(location, "destination"))
+                          }}
+                        >
+                          {destinations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                        </select>
+                      </div>
+                      <p className="rounded-lg border border-amber-400/15 bg-amber-400/[0.06] px-2.5 py-2 text-[10px] leading-4 text-amber-200/80">
+                        Live place search requires a Mapbox token.
+                      </p>
+                    </>
+                  )}
 
                   <ResponderModeSelector value={responderMode} onChange={handleResponderChange} />
 
@@ -210,7 +284,7 @@ export function DisasterDashboard() {
                     type="button"
                     className="analyze-button"
                     onClick={handleAnalyzeRoute}
-                    disabled={analysisStatus === "analyzing"}
+                    disabled={analysisStatus === "analyzing" || !canAnalyzeRoute}
                   >
                     {analysisStatus === "analyzing" ? (
                       <><span className="button-spinner" />Analyzing network</>
@@ -218,6 +292,11 @@ export function DisasterDashboard() {
                       <>Analyze route<ArrowRight className="size-3.5" aria-hidden="true" /></>
                     )}
                   </button>
+                  {mapboxToken && !canAnalyzeRoute && (
+                    <p className="text-[10px] leading-4 text-slate-500">
+                      Real-place markers are ready. Coordinate-based route analysis requires the next backend update.
+                    </p>
+                  )}
                 </div>
               </section>
 
@@ -240,8 +319,9 @@ export function DisasterDashboard() {
               recommendedRoute={analysisResult?.route ?? null}
               selectedHazardId={selectedHazard.id}
               onSelectHazard={handleHazardSelection}
-              startingLocation={selectedStartingLocation}
-              destination={selectedDestination}
+              startingPlace={startingPlace}
+              destinationPlace={destinationPlace}
+              destinationType={destinationType}
             />
           </div>
 

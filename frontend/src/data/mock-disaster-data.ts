@@ -13,6 +13,25 @@ export type ResponderMode =
 export type HazardType = "flooding" | "bridge-damage"
 export type Severity = "LOW" | "MEDIUM" | "HIGH"
 
+export type DestinationType =
+  | "hospital"
+  | "shelter"
+  | "fire-station"
+  | "police-station"
+  | "emergency-room"
+  | "custom"
+
+export interface SelectedPlace {
+  name: string
+  address?: string
+  longitude: number
+  latitude: number
+  category?: string
+  source: "mapbox" | "mock"
+  presetId?: string
+  distanceMeters?: number
+}
+
 export interface Incident {
   name: string
   location: string
@@ -30,6 +49,20 @@ export interface LocationOption {
   name: string
   kind: "start" | "destination" | "hospital" | "shelter"
   coordinates: Coordinates
+}
+
+export function locationOptionToSelectedPlace(
+  location: LocationOption,
+  category?: string,
+): SelectedPlace {
+  return {
+    name: location.name,
+    longitude: location.coordinates[0],
+    latitude: location.coordinates[1],
+    category,
+    source: "mock",
+    presetId: location.id,
+  }
 }
 
 export interface Hazard {

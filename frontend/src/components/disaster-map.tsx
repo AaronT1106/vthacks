@@ -19,10 +19,11 @@ import {
   routes,
   shelters,
   type Hazard,
-  type LocationOption,
+  type DestinationType,
   type MapLayerVisibility,
   type Route,
   type Coordinates,
+  type SelectedPlace,
 } from "@/src/data/mock-disaster-data"
 
 interface DisasterMapProps {
@@ -31,8 +32,9 @@ interface DisasterMapProps {
   recommendedRoute: Route | null
   selectedHazardId: string
   onSelectHazard: (hazard: Hazard) => void
-  startingLocation: LocationOption
-  destination: LocationOption
+  startingPlace: SelectedPlace | null
+  destinationPlace: SelectedPlace | null
+  destinationType: DestinationType
 }
 
 interface CurrentMapState {
@@ -40,8 +42,9 @@ interface CurrentMapState {
   analysisComplete: boolean
   recommendedRoute: Route | null
   selectedHazardId: string
-  startingLocation: LocationOption
-  destination: LocationOption
+  startingPlace: SelectedPlace | null
+  destinationPlace: SelectedPlace | null
+  destinationType: DestinationType
 }
 
 interface StoredCamera {
@@ -84,6 +87,67 @@ function pointCollection(
   }
 }
 
+function selectedPlaceCollection(
+  place: SelectedPlace | null,
+  role: "Starting Point" | "Destination",
+  destinationType?: DestinationType,
+): FeatureCollection<Point> {
+  if (!place) return { type: "FeatureCollection", features: [] }
+  return {
+    type: "FeatureCollection",
+    features: [{
+      type: "Feature",
+      properties: {
+        role,
+        name: place.name,
+        address: place.address ?? "",
+        category: role === "Starting Point"
+          ? place.category ?? "Starting point"
+          : destinationType?.replaceAll("-", " ") ?? place.category ?? "Destination",
+      },
+      geometry: { type: "Point", coordinates: [place.longitude, place.latitude] },
+    }],
+  }
+}
+
+function destinationMarkerColor(destinationType: DestinationType) {
+  const colors: Record<DestinationType, string> = {
+    hospital: "#38bdf8",
+    shelter: "#34d399",
+    "fire-station": "#fb7185",
+    "police-station": "#818cf8",
+    "emergency-room": "#f87171",
+    custom: "#fbbf24",
+  }
+  return colors[destinationType]
+}
+
+function createPlacePopupContent(properties: Record<string, unknown>) {
+  const container = document.createElement("div")
+  container.className = "map-place-popup"
+
+  const role = document.createElement("p")
+  role.className = "map-place-popup-role"
+  role.textContent = String(properties.role ?? "Selected place")
+
+  const name = document.createElement("p")
+  name.className = "map-place-popup-name"
+  name.textContent = String(properties.name ?? "Unknown place")
+
+  container.append(role, name)
+  if (properties.address) {
+    const address = document.createElement("p")
+    address.className = "map-place-popup-address"
+    address.textContent = String(properties.address)
+    container.append(address)
+  }
+  return container
+}
+
+function placeCoordinates(place: SelectedPlace | null): Coordinates | null {
+  return place ? [place.longitude, place.latitude] : null
+}
+
 function routeCollection(coordinates: Array<[number, number]>): FeatureCollection<LineString> {
   return {
     type: "FeatureCollection",
@@ -98,6 +162,9 @@ function routeCollection(coordinates: Array<[number, number]>): FeatureCollectio
 }
 
 function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) {
+  const startCoordinates = placeCoordinates(currentState.startingPlace) ?? unsafeRoute.coordinates[0]
+  const destinationCoordinates = placeCoordinates(currentState.destinationPlace)
+    ?? unsafeRoute.coordinates[unsafeRoute.coordinates.length - 1]
   if (!map.getSource("risk-area")) {
     map.addSource("risk-area", { type: "geojson", data: polygonCollection(floodHazard) })
     map.addLayer({
@@ -140,9 +207,9 @@ function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) 
     map.addSource("unsafe-route", {
       type: "geojson",
       data: routeCollection([
-        currentState.startingLocation.coordinates,
+        startCoordinates,
         ...unsafeRoute.coordinates.slice(1, -1),
-        currentState.destination.coordinates,
+        destinationCoordinates,
       ]),
     })
     map.addLayer({
@@ -210,20 +277,42 @@ function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) 
     })
   }
 
-  if (!map.getSource("route-endpoints")) {
-    map.addSource("route-endpoints", {
+  if (!map.getSource("starting-place")) {
+    map.addSource("starting-place", {
       type: "geojson",
-      data: pointCollection([currentState.startingLocation, currentState.destination]),
+      data: selectedPlaceCollection(currentState.startingPlace, "Starting Point"),
     })
     map.addLayer({
-      id: "route-endpoint-points",
+      id: "starting-place-point",
       type: "circle",
-      source: "route-endpoints",
+      source: "starting-place",
       paint: {
-        "circle-color": "#f8fafc",
-        "circle-radius": 6,
-        "circle-stroke-color": "#0f172a",
-        "circle-stroke-width": 3,
+        "circle-color": "#22d3ee",
+        "circle-radius": 7,
+        "circle-stroke-color": "#cffafe",
+        "circle-stroke-width": 2,
+      },
+    })
+  }
+
+  if (!map.getSource("destination-place")) {
+    map.addSource("destination-place", {
+      type: "geojson",
+      data: selectedPlaceCollection(
+        currentState.destinationPlace,
+        "Destination",
+        currentState.destinationType,
+      ),
+    })
+    map.addLayer({
+      id: "destination-place-point",
+      type: "circle",
+      source: "destination-place",
+      paint: {
+        "circle-color": destinationMarkerColor(currentState.destinationType),
+        "circle-radius": 8,
+        "circle-stroke-color": "#f8fafc",
+        "circle-stroke-width": 2,
       },
     })
   }
@@ -238,20 +327,39 @@ function setLayerVisibility(map: MapboxMap, layerId: string, visible: boolean) {
 function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) {
   if (!map.isStyleLoaded()) return
 
-  const endpointSource = map.getSource("route-endpoints") as GeoJSONSource | undefined
-  endpointSource?.setData(pointCollection([currentState.startingLocation, currentState.destination]))
+  const startingPlaceSource = map.getSource("starting-place") as GeoJSONSource | undefined
+  startingPlaceSource?.setData(selectedPlaceCollection(currentState.startingPlace, "Starting Point"))
+
+  const destinationPlaceSource = map.getSource("destination-place") as GeoJSONSource | undefined
+  destinationPlaceSource?.setData(selectedPlaceCollection(
+    currentState.destinationPlace,
+    "Destination",
+    currentState.destinationType,
+  ))
+
+  const startCoordinates = placeCoordinates(currentState.startingPlace) ?? unsafeRoute.coordinates[0]
+  const destinationCoordinates = placeCoordinates(currentState.destinationPlace)
+    ?? unsafeRoute.coordinates[unsafeRoute.coordinates.length - 1]
 
   const unsafeRouteSource = map.getSource("unsafe-route") as GeoJSONSource | undefined
   unsafeRouteSource?.setData(
     routeCollection([
-      currentState.startingLocation.coordinates,
+      startCoordinates,
       ...unsafeRoute.coordinates.slice(1, -1),
-      currentState.destination.coordinates,
+      destinationCoordinates,
     ]),
   )
 
   const safeRouteSource = map.getSource("safe-route") as GeoJSONSource | undefined
   safeRouteSource?.setData(routeCollection(currentState.recommendedRoute?.coordinates ?? []))
+
+  if (map.getLayer("destination-place-point")) {
+    map.setPaintProperty(
+      "destination-place-point",
+      "circle-color",
+      destinationMarkerColor(currentState.destinationType),
+    )
+  }
 
   setLayerVisibility(map, "risk-area-fill", currentState.layers.risk)
   setLayerVisibility(map, "flooding-fill", currentState.layers.flooding)
@@ -311,20 +419,23 @@ export function DisasterMap({
   recommendedRoute,
   selectedHazardId,
   onSelectHazard,
-  startingLocation,
-  destination,
+  startingPlace,
+  destinationPlace,
+  destinationType,
 }: DisasterMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<MapboxMap | null>(null)
   const currentStyle = useRef<"dark" | "satellite">(layers.satellite ? "satellite" : "dark")
   const storedCamera = useRef<StoredCamera | null>(null)
+  const lastFramedPlaces = useRef("")
   const currentMapState = useRef<CurrentMapState>({
     layers,
     analysisComplete,
     recommendedRoute,
     selectedHazardId,
-    startingLocation,
-    destination,
+    startingPlace,
+    destinationPlace,
+    destinationType,
   })
   const hazardSelectionHandler = useRef(onSelectHazard)
   const [mapFailed, setMapFailed] = useState(false)
@@ -337,11 +448,21 @@ export function DisasterMap({
       analysisComplete,
       recommendedRoute,
       selectedHazardId,
-      startingLocation,
-      destination,
+      startingPlace,
+      destinationPlace,
+      destinationType,
     }
     hazardSelectionHandler.current = onSelectHazard
-  }, [analysisComplete, destination, layers, onSelectHazard, recommendedRoute, selectedHazardId, startingLocation])
+  }, [
+    analysisComplete,
+    destinationPlace,
+    destinationType,
+    layers,
+    onSelectHazard,
+    recommendedRoute,
+    selectedHazardId,
+    startingPlace,
+  ])
 
   useEffect(() => {
     if (!mapboxToken || !mapContainer.current || mapFailed) return
@@ -396,6 +517,20 @@ export function DisasterMap({
 
         initializedMap.on("click", (event) => {
           if (!initializedMap) return
+          const placeLayers = ["starting-place-point", "destination-place-point"].filter((layerId) =>
+            initializedMap?.getLayer(layerId),
+          )
+          const selectedPlaceFeature = placeLayers.length > 0
+            ? initializedMap.queryRenderedFeatures(event.point, { layers: placeLayers })[0]
+            : undefined
+          if (selectedPlaceFeature?.properties) {
+            new mapboxgl.Popup({ closeButton: false, offset: 12, className: "disaster-map-popup" })
+              .setLngLat(event.lngLat)
+              .setDOMContent(createPlacePopupContent(selectedPlaceFeature.properties))
+              .addTo(initializedMap)
+            return
+          }
+
           const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
             initializedMap?.getLayer(layerId),
           )
@@ -411,7 +546,12 @@ export function DisasterMap({
 
         initializedMap.on("mousemove", (event) => {
           if (!initializedMap) return
-          const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
+          const clickableLayers = [
+            "starting-place-point",
+            "destination-place-point",
+            "flooding-fill",
+            "bridge-damage-fill",
+          ].filter((layerId) =>
             initializedMap?.getLayer(layerId),
           )
           const hasInteractiveFeature =
@@ -436,7 +576,44 @@ export function DisasterMap({
   useEffect(() => {
     if (!map.current || !mapReady) return
     synchronizeMockMapState(map.current, currentMapState.current)
-  }, [analysisComplete, destination, layers, mapReady, recommendedRoute, selectedHazardId, startingLocation])
+  }, [
+    analysisComplete,
+    destinationPlace,
+    destinationType,
+    layers,
+    mapReady,
+    recommendedRoute,
+    selectedHazardId,
+    startingPlace,
+  ])
+
+  useEffect(() => {
+    if (!map.current || !mapReady || !startingPlace) return
+    const selectionKey = [
+      startingPlace.longitude,
+      startingPlace.latitude,
+      destinationPlace?.longitude ?? "",
+      destinationPlace?.latitude ?? "",
+    ].join(":")
+    if (selectionKey === lastFramedPlaces.current) return
+    lastFramedPlaces.current = selectionKey
+
+    if (destinationPlace) {
+      map.current.fitBounds(
+        [
+          [startingPlace.longitude, startingPlace.latitude],
+          [destinationPlace.longitude, destinationPlace.latitude],
+        ],
+        { padding: 80, maxZoom: 14, duration: 700 },
+      )
+    } else {
+      map.current.easeTo({
+        center: [startingPlace.longitude, startingPlace.latitude],
+        zoom: 13.5,
+        duration: 650,
+      })
+    }
+  }, [destinationPlace, mapReady, startingPlace])
 
   useEffect(() => {
     if (!map.current || !mapReady) return
@@ -493,8 +670,9 @@ export function DisasterMap({
           recommendedRoute={recommendedRoute}
           selectedHazardId={selectedHazardId}
           onSelectHazard={onSelectHazard}
-          startingLocation={startingLocation}
-          destination={destination}
+          startingPlace={startingPlace}
+          destinationPlace={destinationPlace}
+          destinationType={destinationType}
         />
       ) : (
         <div ref={mapContainer} className="absolute inset-0 min-h-full min-w-full" />
@@ -551,12 +729,17 @@ function FallbackMap({
   recommendedRoute,
   selectedHazardId,
   onSelectHazard,
-  startingLocation,
-  destination,
+  startingPlace,
+  destinationPlace,
+  destinationType,
 }: DisasterMapProps) {
   const routePoints = recommendedRoute?.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
-  const startPoint = projectDemoPoint(startingLocation.coordinates)
-  const endPoint = projectDemoPoint(destination.coordinates)
+  const startPoint = startingPlace
+    ? projectDemoPoint([startingPlace.longitude, startingPlace.latitude])
+    : null
+  const endPoint = destinationPlace
+    ? projectDemoPoint([destinationPlace.longitude, destinationPlace.latitude])
+    : null
 
   return (
     <div className={`absolute inset-0 ${layers.satellite ? "fallback-map-satellite" : "fallback-map"}`}>
@@ -578,7 +761,7 @@ function FallbackMap({
           ))}
         </g>
         {layers.risk && <ellipse cx="492" cy="360" rx="150" ry="105" fill="#f97316" opacity="0.1" />}
-        {analysisComplete && (
+        {analysisComplete && startPoint && endPoint && (
           <polyline
             points={[startPoint, projectDemoPoint(floodHazard.coordinates), endPoint]
               .map((point) => point.join(","))
@@ -635,18 +818,22 @@ function FallbackMap({
         )}
       </svg>
 
-      <MapMarker
-        point={startPoint}
-        label={startingLocation.name}
-        icon={Navigation}
-        tone="bg-slate-100 text-slate-950"
-      />
-      <MapMarker
-        point={endPoint}
-        label={destination.name}
-        icon={MapPin}
-        tone="bg-sky-400 text-slate-950"
-      />
+      {startingPlace && startPoint && (
+        <MapMarker
+          point={startPoint}
+          label={startingPlace.name}
+          icon={Navigation}
+          tone="bg-cyan-400 text-slate-950"
+        />
+      )}
+      {destinationPlace && endPoint && (
+        <MapMarker
+          point={endPoint}
+          label={destinationPlace.name}
+          icon={MapPin}
+          tone={destinationMarkerTone(destinationType)}
+        />
+      )}
       {layers.hospitals && (
         <MapMarker
           className="left-[76%] top-[70%]"
@@ -731,6 +918,18 @@ function MapMarker({
       </span>
     </div>
   )
+}
+
+function destinationMarkerTone(destinationType: DestinationType) {
+  const tones: Record<DestinationType, string> = {
+    hospital: "bg-sky-400 text-slate-950",
+    shelter: "bg-emerald-400 text-slate-950",
+    "fire-station": "bg-rose-400 text-slate-950",
+    "police-station": "bg-indigo-400 text-slate-950",
+    "emergency-room": "bg-red-400 text-slate-950",
+    custom: "bg-amber-400 text-slate-950",
+  }
+  return tones[destinationType]
 }
 
 // Project backend geometry into the fallback's illustrative coordinate space.
