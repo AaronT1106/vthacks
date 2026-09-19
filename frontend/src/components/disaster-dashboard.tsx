@@ -48,6 +48,15 @@ import {
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 type DashboardTab = "situation-map" | "routes" | "incidents"
 
+function formatFeedTime(date: Date) {
+  return date.toLocaleTimeString([], {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  })
+}
+
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
   const [activeTab, setActiveTab] = useState<DashboardTab>("situation-map")
@@ -120,18 +129,23 @@ export function DisasterDashboard() {
 
   function updateHazardVerification(hazardId: string, verification: string) {
     const hazard = hazardRecords.find((item) => item.id === hazardId)
-    if (!hazard) return
+    if (!hazard || hazard.verification === verification) return
 
     setHazardRecords((currentHazards) => currentHazards.map((item) =>
       item.id === hazardId ? { ...item, verification } : item,
     ))
     const now = new Date()
+    const confirmed = verification.includes("Confirmed")
     setChangeEvents((currentEvents) => [{
       id: `verification-${hazardId}-${now.getTime()}`,
-      time: now.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      title: verification,
-      detail: `${hazard.name} review updated locally (mock demo)`,
-      tone: verification.includes("Confirmed") ? "safe" : "warning",
+      time: formatFeedTime(now),
+      title: confirmed
+        ? `${hazard.name} confirmed (mock demo)`
+        : `${hazard.name} marked false positive (mock demo)`,
+      detail: confirmed
+        ? `${hazard.confidence}% ${hazard.type.replaceAll("-", " ")} detection confirmed for ${hazard.affected.join(" and ")}; source: ${hazard.source}.`
+        : `Operator rejected the ${hazard.confidence}% ${hazard.type.replaceAll("-", " ")} detection affecting ${hazard.affected.join(" and ")}.`,
+      tone: confirmed ? "safe" : "warning",
     }, ...currentEvents])
   }
 
@@ -196,19 +210,25 @@ export function DisasterDashboard() {
       setAnalysisResult(result)
       const selectedRole = responderModes.find((mode) => mode.id === responderMode)?.label ?? "Responder"
       const now = new Date()
-      const newEvent: ChangeEvent = {
+      const alternativeTime = new Date(now.getTime() - 1000)
+      const routeEvent: ChangeEvent = {
         id: `analysis-${now.getTime()}`,
-        time: now.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        title: `${result.recommendation.routeName} recommended (mock)`,
-        detail: usesPresetRoute
-          ? `${selectedRole} mock analysis received from the backend`
-          : `${selectedRole} frontend mock route created for selected coordinates`,
+        time: formatFeedTime(now),
+        title: `${result.recommendation.routeName} recommended for ${selectedRole} (mock demo)`,
+        detail: `Requested destination: ${destinationPlace.name}. Recommended destination: ${result.recommendation.recommendedDestination}; ${result.recommendation.travelTime}, ${result.recommendation.distance}, ${result.recommendation.risk.toLowerCase()} risk.`,
         tone: "safe",
+      }
+      const alternativeEvent: ChangeEvent = {
+        id: `alternative-${now.getTime()}`,
+        time: formatFeedTime(alternativeTime),
+        title: `${result.recommendation.alternative.routeName} rejected (mock demo)`,
+        detail: `${selectedRole} route to ${result.recommendation.recommendedDestination}: ${result.recommendation.alternative.rejectionReason}`,
+        tone: "warning",
       }
 
       setAnalysisStatus("complete")
       setSelectedHazardId(hazards[0].id)
-      setChangeEvents((currentEvents) => [newEvent, ...currentEvents])
+      setChangeEvents((currentEvents) => [routeEvent, alternativeEvent, ...currentEvents])
     } catch (error) {
       if (activeRequest.current !== controller) return
       setAnalysisStatus("error")
