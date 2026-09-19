@@ -208,9 +208,9 @@ export function PlaceSearchInput({
     } else if (event.key === "ArrowUp") {
       event.preventDefault()
       setActiveIndex((current) => Math.max(current - 1, 0))
-    } else if (event.key === "Enter" && activeIndex >= 0) {
+    } else if (event.key === "Enter") {
       event.preventDefault()
-      void selectSuggestion(suggestions[activeIndex])
+      void selectSuggestion(suggestions[activeIndex >= 0 ? activeIndex : 0])
     } else if (event.key === "Escape") {
       setIsOpen(false)
     }

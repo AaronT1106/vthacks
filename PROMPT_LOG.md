@@ -366,3 +366,211 @@ Make route analysis meaningfully different for civilians, ambulances, firefighte
 - `npm run lint`: passed.
 - `npm run build`: passed, including TypeScript and static generation. The sandboxed build compiled but hit `spawn EPERM` when starting the TypeScript worker; the approved outside-sandbox retry passed.
 - `git diff --check`: passed before this log entry; line-ending warnings were informational.
+---
+
+## Mapbox Place Search and Accurate Markers
+
+### Request
+
+Replace token-enabled preset location controls with Mapbox Search Box autocomplete and nearby destination discovery, keep preset selectors as the no-token fallback, and use selected coordinates for accurate map markers without changing the current backend route contract.
+
+### Files Changed
+
+- `frontend/src/data/mock-disaster-data.ts`: shared `SelectedPlace` and `DestinationType` types plus preset conversion.
+- `frontend/src/lib/mapbox-place-search.ts`: Mapbox suggest, retrieve, and forward request helpers.
+- `frontend/src/components/place-search-input.tsx`: accessible debounced autocomplete, cancellation, retrieval, clearing, and nearby results.
+- `frontend/src/components/destination-type-selector.tsx`: six destination categories.
+- `frontend/src/components/disaster-dashboard.tsx`: place state, token/no-token controls, analysis invalidation, and preset-only routing guard.
+- `frontend/src/components/disaster-map.tsx`: coordinate-driven start/destination sources, semantic marker styling, popups, easing, and bounds fitting.
+- `frontend/app/globals.css`: autocomplete and Mapbox popup presentation.
+- `PROMPT_LOG.md`: this entry.
+
+### Implementation Decisions
+
+- Autocomplete uses a new `crypto.randomUUID()` search-session token with Mapbox `/suggest`, followed by `/retrieve/{mapbox_id}` using that same token. Superseded searches and selections are aborted and stale responses are ignored.
+- Nearby non-custom destination results use a one-off `/forward` request, biased to the selected start or the Blacksburg incident center, and retain Mapbox-provided distance only when returned.
+- Mapbox selections remain in frontend state only. Start and destination coordinates update independent GeoJSON sources without rebuilding the map; selecting one point eases to it and selecting two fits both.
+- Preset selections retain their IDs and existing backend analysis. Real Mapbox places have no preset ID, so Analyze Route is disabled with an explanation until the backend accepts coordinate payloads.
+- No token, dependency manifest, backend file, or routing contract was changed.
+
+### Validation
+
+- `npm run lint` passed.
+- `npx tsc --noEmit` passed.
+- `npm run build -- --webpack` passed, including static generation.
+- The configured public token successfully returned a suggestion, matching retrieved coordinates, and four coordinate-bearing nearby results through the live Search Box endpoints; the token was not printed or changed.
+- A no-token development render returned HTTP 200 and contained the preset start/destination controls, Mapbox guidance, and `Demo Map` fallback.
+- `git diff --check` passed. Backend and dependency manifests remained unchanged.
+- Browser visual and pointer-interaction checks remain pending because no browser connection was available; API behavior, compilation, and no-token rendering were validated programmatically.
+
+---
+
+## Disaster-Area Selection Entry Flow — 2026-09-19
+
+### Request
+
+Make disaster-area selection the first functional step after the existing Three.js intro, then preserve the confirmed region while opening the existing operations dashboard.
+
+### Files Changed
+
+- `frontend/src/data/mock-disaster-data.ts`: added the shared `DisasterAreaBounds` interface.
+- `frontend/src/components/disaster-area-selection.tsx`: added the focused entry screen, search, progress indicator, summary, and confirmation flow.
+- `frontend/src/components/disaster-area-selection-map.tsx`: added Mapbox and demo-map rectangle drawing without a new dependency.
+- `frontend/src/components/disaster-dashboard.tsx`: added session-only bounds and confirmation state and gated the existing dashboard behind area confirmation.
+- `frontend/src/components/disaster-map.tsx`: displayed the confirmed bounds as a non-interactive overlay in Mapbox and fallback modes.
+- `frontend/app/globals.css`: added restrained controls for the new screen.
+- `PROMPT_LOG.md`: resolved the existing merge conflict by preserving both histories and added this entry.
+
+### Implementation Decisions
+
+- The dashboard owns the only committed bounds state, using west, south, east, and north values. Map components keep only temporary drag previews.
+- Search reuses the existing Mapbox Search Box component and recenters the selection map without confirming an area.
+- Mapbox selection uses existing GeoJSON sources and pointer events. The no-token demo map supports the same draw, clear, redraw, and confirm flow through its existing coordinate projection.
+- Confirm remains disabled until a non-zero rectangle exists. Confirmed bounds stay in React state for the page session and remain visible on the operations map.
+- No backend, dependency manifest, environment token, imagery workflow, detection logic, or routing contract was changed.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including TypeScript and static generation.
+- The no-token development server returned HTTP 200 and rendered the existing Three.js intro; the post-intro selection screen remains client-rendered as intended.
+- Browser visual, pointer, and transition checks remain pending because no browser connection was available in the session.
+- Backend files and dependency manifests remained unchanged.
+
+---
+
+## Area Search Result Marker — 2026-09-19
+
+### Request
+
+Make a location selected from the disaster-area search visibly appear on the selection map.
+
+### Implemented
+
+- Added a dedicated GeoJSON point source and cyan marker for the selected search result.
+- Added a small Mapbox popup showing the selected place name and address.
+- Kept the existing behavior that recenters the map without automatically selecting or confirming disaster bounds.
+- Replaced and removed the marker and popup when the search selection changes or is cleared.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- No backend or dependency changes were made.
+
+---
+
+## First-Screen Map Visibility and Search Submission Fix — 2026-09-19
+
+### Request
+
+Fix the disaster-area screen when searching for Blacksburg did not produce a usable visible map for drawing.
+
+### Implemented
+
+- Gave the area-selection map an explicit responsive viewport height so its drawing surface cannot collapse.
+- Made Enter select the first autocomplete result when no result has been arrow-selected, matching normal search-field behavior.
+- Added an eight-second Mapbox load timeout and pre-load error fallback so the interactive demo map appears instead of an indefinite blank/loading surface.
+- Kept successful Mapbox search, marker, popup, bounds drawing, and dashboard behavior unchanged.
+
+### Validation
+
+- Confirmed the configured token can retrieve the Mapbox dark basemap style with HTTP 200.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- Browser interaction verification remains unavailable because no browser connection is exposed to this session.
+
+---
+
+## Initial Area Mapbox Lifecycle Fix — 2026-09-19
+
+### Request
+
+Debug only why the real Mapbox map was not visibly rendering as soon as the post-intro disaster-area screen opened.
+
+### Root Cause and Fix
+
+- The map was already created on component mount and did not depend on search, but an opaque loading layer covered its canvas until Mapbox's later `load` event.
+- The error handler also treated every pre-load resource error as fatal, immediately switching to the fallback and cleaning up the real map even when authentication was valid.
+- Map construction now starts on the next animation frame after the area screen commits, readiness uses `style.load`, and resize runs immediately plus once on the following frame.
+- The blocking loading layer was replaced by the existing small status label, and only authentication errors, constructor/WebGL failures, or a real style-load timeout trigger fallback.
+- Search still moves the existing instance with `easeTo`; bounding-box and no-token fallback behavior were not changed.
+
+### Files Changed
+
+- `frontend/src/components/disaster-area-selection-map.tsx`
+- `PROMPT_LOG.md`
+
+### Validation
+
+- Confirmed the token remains in ignored `frontend/.env.local` and the Mapbox dark style endpoint returns HTTP 200.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- The running development server compiled the change without Mapbox, WebGL initialization, authentication, style, or duplicate-container errors; the expected Three.js context-disposal message remains unrelated.
+- Browser visual, pan/zoom, search movement, and pointer-drawing checks remain pending because no browser connection was available.
+- No backend, dependency manifest, environment file, dashboard, search, or unrelated UI changes were made.
+
+---
+
+## Analyze Route Interaction and Role Label Fix — 2026-09-19
+
+### Request
+
+Fix the Analyze Route button appearing permanently busy after responder changes and ensure the selected responder produces a clearly identified role-specific recommendation.
+
+### Root Cause and Implementation
+
+- The shared button style applied `cursor-wait` to every disabled state. That made the intentional preset-only routing restriction for real Mapbox places look like an analysis that never finished.
+- The dashboard now derives separate analyzing and unsupported-location states. Only active analysis uses the wait cursor and spinner; unsupported real-place routing uses a not-allowed cursor and keeps the existing explanation.
+- The button remains `type="button"`, responder changes still cancel/reset any active request, and analysis remains a deliberate click rather than an automatic action.
+- The result panel now labels the response with the returned responder role, preserving the visible Supply Truck wording and `supply-vehicle` API ID.
+- The existing FastAPI mock endpoint remains the only recommendation source. Its five profiles already return distinct names, destinations, metrics, explanations, hazards, confidence values, and route geometries, so no duplicate frontend fixtures were added.
+
+### Files Changed
+
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/route-recommendation-panel.tsx`
+- `frontend/app/globals.css`
+- `PROMPT_LOG.md`
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- A standard-library fixture check confirmed all five backend responder profiles have complete fields, distinct route names, and distinct route geometry.
+- Full backend endpoint tests could not run because FastAPI is not installed in the available Python environment and no backend server was running on port 8000; no backend files were changed.
+- Browser interaction checks remain pending because no browser connection was available.
+
+---
+
+## Enable Analyze Route for Real Mapbox Places — 2026-09-19
+
+### Request
+
+Make the greyed-out Analyze Route button work when the user has selected real Mapbox locations.
+
+### Root Cause and Implementation
+
+- The button required both locations to have backend preset IDs. Real Mapbox results contain coordinates but intentionally have no preset IDs, so valid visible locations left the button disabled.
+- Analyze Route is now enabled whenever both a start and destination exist.
+- Preset locations continue using the existing FastAPI mock endpoint without contract changes.
+- Real Mapbox locations use a 650 ms frontend-only mock analysis with role-specific priorities, recommendations, and illustrative coordinates anchored to the actual selected endpoints.
+- The UI and explanation explicitly label coordinate analysis as an illustrative frontend mock; it is not presented as real routing.
+- Clearing either location still disables the button until both endpoints are selected.
+
+### Files Changed
+
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/lib/route-analysis.ts`
+- `PROMPT_LOG.md`
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed, including static generation.
+- No backend, dependency manifest, or environment files were changed.

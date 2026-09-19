@@ -13,6 +13,7 @@ import {
   Route as RouteIcon,
 } from "lucide-react"
 import { DamageDetailsPanel } from "@/src/components/damage-details-panel"
+import { DisasterAreaSelection } from "@/src/components/disaster-area-selection"
 import { DestinationTypeSelector } from "@/src/components/destination-type-selector"
 import { DisasterMap } from "@/src/components/disaster-map"
 import { LiveDataSources } from "@/src/components/live-data-sources"
@@ -22,7 +23,7 @@ import { ResponderModeSelector } from "@/src/components/responder-mode-selector"
 import { RouteRecommendationPanel } from "@/src/components/route-recommendation-panel"
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
 import { WhatChangedFeed } from "@/src/components/what-changed-feed"
-import { analyzeRoute } from "@/src/lib/route-analysis"
+import { analyzeCoordinateRoute, analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
   destinations,
@@ -35,6 +36,7 @@ import {
   type ChangeEvent,
   type Coordinates,
   type DestinationType,
+  type DisasterAreaBounds,
   type Hazard,
   type MapLayerVisibility,
   type ResponderMode,
@@ -46,6 +48,8 @@ type AnalysisStatus = "idle" | "analyzing" | "complete" | "error"
 
 export function DisasterDashboard() {
   const [showIntro, setShowIntro] = useState(true)
+  const [disasterAreaBounds, setDisasterAreaBounds] = useState<DisasterAreaBounds | null>(null)
+  const [areaConfirmed, setAreaConfirmed] = useState(false)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
   const [startingPlace, setStartingPlace] = useState<SelectedPlace | null>(() =>
     locationOptionToSelectedPlace(startingLocations[0], "fire station"),
@@ -84,7 +88,10 @@ export function DisasterDashboard() {
     ? [startingPlace.longitude, startingPlace.latitude]
     : incident.center,
   [startingPlace])
-  const canAnalyzeRoute = Boolean(startingPlace?.presetId && destinationPlace?.presetId)
+  const canAnalyzeRoute = Boolean(startingPlace && destinationPlace)
+  const usesPresetRoute = Boolean(startingPlace?.presetId && destinationPlace?.presetId)
+  const isAnalyzing = analysisStatus === "analyzing"
+  const routeLocationsMissing = !canAnalyzeRoute
 
   useEffect(() => {
     return () => {
@@ -134,7 +141,7 @@ export function DisasterDashboard() {
   }
 
   async function handleAnalyzeRoute() {
-    if (activeRequest.current || !startingPlace?.presetId || !destinationPlace?.presetId) return
+    if (activeRequest.current || !startingPlace || !destinationPlace) return
     const controller = new AbortController()
     activeRequest.current = controller
     setAnalysisResult(null)
@@ -142,11 +149,18 @@ export function DisasterDashboard() {
     setAnalysisStatus("analyzing")
     const timeout = window.setTimeout(() => controller.abort(), 15000)
     try {
-      const result = await analyzeRoute({
-        startingPoint: startingPlace.presetId,
-        destination: destinationPlace.presetId,
-        responderType: responderMode,
-      }, controller.signal)
+      const result = usesPresetRoute
+        ? await analyzeRoute({
+            startingPoint: startingPlace.presetId!,
+            destination: destinationPlace.presetId!,
+            responderType: responderMode,
+          }, controller.signal)
+        : await analyzeCoordinateRoute({
+            startingPlace,
+            destinationPlace,
+            responderType: responderMode,
+            signal: controller.signal,
+          })
       if (activeRequest.current !== controller) return
       setAnalysisResult(result)
       const selectedRole = responderModes.find((mode) => mode.id === responderMode)?.label ?? "Responder"
@@ -155,7 +169,9 @@ export function DisasterDashboard() {
         id: `analysis-${now.getTime()}`,
         time: now.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         title: `${result.recommendation.routeName} recommended (mock)`,
-        detail: `${selectedRole} mock analysis received from the backend`,
+        detail: usesPresetRoute
+          ? `${selectedRole} mock analysis received from the backend`
+          : `${selectedRole} frontend mock route created for selected coordinates`,
         tone: "safe",
       }
 
@@ -180,10 +196,20 @@ export function DisasterDashboard() {
     <>
       <AnimatePresence>{showIntro && <ThreeDimensionalGlobe onComplete={() => setShowIntro(false)} />}</AnimatePresence>
 
-      <motion.main
+      {!showIntro && !areaConfirmed && (
+        <DisasterAreaSelection
+          bounds={disasterAreaBounds}
+          onBoundsChange={setDisasterAreaBounds}
+          onConfirm={() => {
+            if (disasterAreaBounds) setAreaConfirmed(true)
+          }}
+        />
+      )}
+
+      {areaConfirmed && <motion.main
         className="flex min-h-screen flex-col overflow-hidden bg-[#05080e] text-slate-100"
         initial={{ opacity: 0 }}
-        animate={{ opacity: showIntro ? 0 : 1 }}
+        animate={{ opacity: 1 }}
         transition={{ duration: 0.45 }}
       >
         <header className="flex min-h-14 items-center justify-between gap-4 border-b border-white/[0.07] bg-[#080c13] px-4 sm:px-5">
@@ -299,19 +325,31 @@ export function DisasterDashboard() {
 
                   <button
                     type="button"
-                    className="analyze-button"
+                    className={`analyze-button ${
+                      isAnalyzing
+                        ? "cursor-wait disabled:bg-cyan-700 disabled:text-cyan-100"
+                        : routeLocationsMissing
+                          ? "cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+                          : "cursor-pointer"
+                    }`}
                     onClick={handleAnalyzeRoute}
-                    disabled={analysisStatus === "analyzing" || !canAnalyzeRoute}
+                    disabled={isAnalyzing || routeLocationsMissing}
+                    aria-describedby={routeLocationsMissing ? "route-location-limitation" : undefined}
                   >
-                    {analysisStatus === "analyzing" ? (
-                      <><span className="button-spinner" />Analyzing network</>
+                    {isAnalyzing ? (
+                      <><span className="button-spinner" />Analyzing…</>
                     ) : (
                       <>Analyze route<ArrowRight className="size-3.5" aria-hidden="true" /></>
                     )}
                   </button>
                   {mapboxToken && !canAnalyzeRoute && (
-                    <p className="text-[10px] leading-4 text-slate-500">
-                      Real-place markers are ready. Coordinate-based route analysis requires the next backend update.
+                    <p id="route-location-limitation" className="text-[10px] leading-4 text-slate-500">
+                      Select both a starting point and destination to analyze a route.
+                    </p>
+                  )}
+                  {mapboxToken && canAnalyzeRoute && !usesPresetRoute && (
+                    <p className="text-[10px] leading-4 text-cyan-300/70">
+                      Real-place analysis uses an illustrative frontend mock route.
                     </p>
                   )}
                 </div>
@@ -339,6 +377,7 @@ export function DisasterDashboard() {
               startingPlace={startingPlace}
               destinationPlace={displayedDestinationPlace}
               destinationType={displayedDestinationType}
+              disasterAreaBounds={disasterAreaBounds}
             />
           </div>
 
@@ -354,7 +393,7 @@ export function DisasterDashboard() {
             </div>
           </aside>
         </div>
-      </motion.main>
+      </motion.main>}
     </>
   )
 }

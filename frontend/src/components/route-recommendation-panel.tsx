@@ -1,6 +1,6 @@
 import { motion } from "framer-motion"
 import { AlertTriangle, Check, Clock3, Gauge, MapPinned, ShieldCheck } from "lucide-react"
-import type { RouteRecommendation } from "@/src/data/mock-disaster-data"
+import { responderModes, type RouteRecommendation } from "@/src/data/mock-disaster-data"
 
 interface RouteRecommendationPanelProps {
   status: "idle" | "analyzing" | "complete" | "error"
@@ -59,6 +59,7 @@ export function RouteRecommendationPanel({
     risk: "HIGH" as const,
     rejectionReason: "The route-analysis response did not include an alternative route.",
   }
+  const responderLabel = responderModes.find((mode) => mode.id === recommendation.role)?.label ?? "Responder"
 
   return (
     <motion.section
@@ -75,7 +76,7 @@ export function RouteRecommendationPanel({
 
       <div className="mt-4 flex items-end justify-between gap-4">
         <div>
-          <p className="text-xs text-slate-500">Simulated recommendation</p>
+          <p className="text-xs text-cyan-300">{responderLabel} route</p>
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recommendation.routeName}</p>
           <p className="mt-1 text-[11px] text-slate-400">To {recommendation.recommendedDestination}</p>
         </div>

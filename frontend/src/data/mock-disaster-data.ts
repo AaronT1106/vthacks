@@ -3,6 +3,13 @@
 
 export type Coordinates = [longitude: number, latitude: number]
 
+export interface DisasterAreaBounds {
+  west: number
+  south: number
+  east: number
+  north: number
+}
+
 export type ResponderMode =
   | "civilian"
   | "ambulance"

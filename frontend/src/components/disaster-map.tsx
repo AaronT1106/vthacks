@@ -23,6 +23,7 @@ import {
   type MapLayerVisibility,
   type Route,
   type Coordinates,
+  type DisasterAreaBounds,
   type SelectedPlace,
 } from "@/src/data/mock-disaster-data"
 
@@ -35,6 +36,7 @@ interface DisasterMapProps {
   startingPlace: SelectedPlace | null
   destinationPlace: SelectedPlace | null
   destinationType: DestinationType
+  disasterAreaBounds: DisasterAreaBounds | null
 }
 
 interface CurrentMapState {
@@ -45,6 +47,7 @@ interface CurrentMapState {
   startingPlace: SelectedPlace | null
   destinationPlace: SelectedPlace | null
   destinationType: DestinationType
+  disasterAreaBounds: DisasterAreaBounds | null
 }
 
 interface StoredCamera {
@@ -161,10 +164,43 @@ function routeCollection(coordinates: Array<[number, number]>): FeatureCollectio
   }
 }
 
+function disasterAreaCollection(bounds: DisasterAreaBounds | null): FeatureCollection<Polygon> {
+  if (!bounds) return { type: "FeatureCollection", features: [] }
+  const coordinates: Coordinates[] = [
+    [bounds.west, bounds.north],
+    [bounds.east, bounds.north],
+    [bounds.east, bounds.south],
+    [bounds.west, bounds.south],
+    [bounds.west, bounds.north],
+  ]
+  return {
+    type: "FeatureCollection",
+    features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [coordinates] } }],
+  }
+}
+
 function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) {
   const startCoordinates = placeCoordinates(currentState.startingPlace) ?? unsafeRoute.coordinates[0]
   const destinationCoordinates = placeCoordinates(currentState.destinationPlace)
     ?? unsafeRoute.coordinates[unsafeRoute.coordinates.length - 1]
+  if (!map.getSource("confirmed-disaster-area")) {
+    map.addSource("confirmed-disaster-area", {
+      type: "geojson",
+      data: disasterAreaCollection(currentState.disasterAreaBounds),
+    })
+    map.addLayer({
+      id: "confirmed-disaster-area-fill",
+      type: "fill",
+      source: "confirmed-disaster-area",
+      paint: { "fill-color": "#22d3ee", "fill-opacity": 0.08 },
+    })
+    map.addLayer({
+      id: "confirmed-disaster-area-outline",
+      type: "line",
+      source: "confirmed-disaster-area",
+      paint: { "line-color": "#67e8f9", "line-width": 1.5, "line-opacity": 0.8 },
+    })
+  }
   if (!map.getSource("risk-area")) {
     map.addSource("risk-area", { type: "geojson", data: polygonCollection(floodHazard) })
     map.addLayer({
@@ -327,6 +363,9 @@ function setLayerVisibility(map: MapboxMap, layerId: string, visible: boolean) {
 function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) {
   if (!map.isStyleLoaded()) return
 
+  const disasterAreaSource = map.getSource("confirmed-disaster-area") as GeoJSONSource | undefined
+  disasterAreaSource?.setData(disasterAreaCollection(currentState.disasterAreaBounds))
+
   const startingPlaceSource = map.getSource("starting-place") as GeoJSONSource | undefined
   startingPlaceSource?.setData(selectedPlaceCollection(currentState.startingPlace, "Starting Point"))
 
@@ -422,6 +461,7 @@ export function DisasterMap({
   startingPlace,
   destinationPlace,
   destinationType,
+  disasterAreaBounds,
 }: DisasterMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<MapboxMap | null>(null)
@@ -436,6 +476,7 @@ export function DisasterMap({
     startingPlace,
     destinationPlace,
     destinationType,
+    disasterAreaBounds,
   })
   const hazardSelectionHandler = useRef(onSelectHazard)
   const [mapFailed, setMapFailed] = useState(false)
@@ -451,12 +492,14 @@ export function DisasterMap({
       startingPlace,
       destinationPlace,
       destinationType,
+      disasterAreaBounds,
     }
     hazardSelectionHandler.current = onSelectHazard
   }, [
     analysisComplete,
     destinationPlace,
     destinationType,
+    disasterAreaBounds,
     layers,
     onSelectHazard,
     recommendedRoute,
@@ -580,6 +623,7 @@ export function DisasterMap({
     analysisComplete,
     destinationPlace,
     destinationType,
+    disasterAreaBounds,
     layers,
     mapReady,
     recommendedRoute,
@@ -673,6 +717,7 @@ export function DisasterMap({
           startingPlace={startingPlace}
           destinationPlace={destinationPlace}
           destinationType={destinationType}
+          disasterAreaBounds={disasterAreaBounds}
         />
       ) : (
         <div ref={mapContainer} className="absolute inset-0 min-h-full min-w-full" />
@@ -732,6 +777,7 @@ function FallbackMap({
   startingPlace,
   destinationPlace,
   destinationType,
+  disasterAreaBounds,
 }: DisasterMapProps) {
   const routePoints = recommendedRoute?.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
   const startPoint = startingPlace
@@ -739,6 +785,12 @@ function FallbackMap({
     : null
   const endPoint = destinationPlace
     ? projectDemoPoint([destinationPlace.longitude, destinationPlace.latitude])
+    : null
+  const disasterAreaTopLeft = disasterAreaBounds
+    ? projectDemoPoint([disasterAreaBounds.west, disasterAreaBounds.north])
+    : null
+  const disasterAreaBottomRight = disasterAreaBounds
+    ? projectDemoPoint([disasterAreaBounds.east, disasterAreaBounds.south])
     : null
 
   return (
@@ -752,6 +804,18 @@ function FallbackMap({
           <path d="M40 325 C225 290 350 345 455 450 S665 645 850 710" strokeWidth="4" />
           <path d="M330 -40 C360 130 465 160 575 235 S705 440 690 735" strokeWidth="4" />
         </g>
+        {disasterAreaTopLeft && disasterAreaBottomRight && (
+          <rect
+            x={disasterAreaTopLeft[0]}
+            y={disasterAreaTopLeft[1]}
+            width={disasterAreaBottomRight[0] - disasterAreaTopLeft[0]}
+            height={disasterAreaBottomRight[1] - disasterAreaTopLeft[1]}
+            fill="#22d3ee"
+            fillOpacity="0.08"
+            stroke="#67e8f9"
+            strokeWidth="2"
+          />
+        )}
         <g className="fallback-minor-roads" fill="none" strokeLinecap="round">
           {Array.from({ length: 8 }).map((_, index) => (
             <path
