@@ -108,7 +108,7 @@ Calculate safer routes using:
 
 Pathfinder explains the evidence behind each recommendation.
 
-> Route B was selected because Route A contains flooding and Route C crosses a damaged bridge.
+> Route B was selected because Route A contains flooding and Route C crosses a blocked road.
 
 ### Situation Map
 
@@ -230,22 +230,28 @@ Run both servers before using Analyze route. Restart Next.js after changing its 
 2. Choose a starting point, destination, and responder type.
 3. Select **Analyze route** to request a mock recommendation from FastAPI.
 4. Toggle map layers to inspect hazards, risk, facilities, and routes.
-5. Select a flood or bridge-damage marker to inspect its evidence.
+5. Select the flood marker to inspect its evidence.
 6. Change responder type, then analyze again to see its preset mock recommendation.
    Changing any selection clears the previous result and cancels an in-flight request.
 
 ### Backend
 
-```powershell
+The backend requires Python 3.12. Use the shared setup script so the virtual
+environment contains the dependencies required by satellite imagery, flood analysis,
+FIRMS, and road-network routing:
+
+```bash
 cd backend
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+./setup.sh
+source .venv/bin/activate
+python -m uvicorn main:app --reload --port 8000
 ```
 
-On macOS or Linux, create and activate the same Python 3.12 environment with
-`python3.12 -m venv .venv` and `source .venv/bin/activate`.
+After pulling teammate backend changes, run `./setup.sh` again before starting
+FastAPI. Pip reuses compatible installed packages and installs only dependencies that
+are missing or no longer satisfy the declared requirements. The script uses
+`--no-cache-dir`, does not install globally, and leaves activation to the developer's
+shell.
 
 The frontend proxies `/api/analyze-route`, `/api/satellite-imagery`,
 `/api/analyze-damage`, `/api/analyze-flood`, `/api/fire-hotspots`, and generated preview/mask URLs to
@@ -462,7 +468,7 @@ The displayed percentage means the share of valid analyzed pixels classified as
 permanent water from new inundation. Cloud, shadow, and domain-shift errors are also
 possible. The overlay is a potential flood/water indicator for human review, not a
 confirmed flood boundary or a physical-area estimate. Large-area tiled inference,
-before/after change detection, hazard creation, and routing integration remain future
+before/after change detection, hazard creation, and hazard-aware routing remain future
 work. The checkpoint's model card has limited documentation and an unspecified license,
 so licensing and independent validation are required before production use.
 
@@ -494,11 +500,33 @@ A zero-row response means only that NASA FIRMS returned no active-fire detection
 the selected area and time window; satellite timing, clouds, visibility, coverage, and
 detection thresholds can affect results.
 
-Flood and fire remain separate analysis sources. FIRMS coordinates, FRP, confidence,
-and acquisition timestamps are retained for a future Route heatmap, but Phase 2 does
-not add map points, clustering, combined hazard scores, routing penalties, or route
-changes. See the [NASA FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/)
-for the provider contract.
+### Route Hazard Visualization
+
+Successful analysis results remain in the current browser session when the user
+continues to Route; opening Route does not rerun SegFormer or query FIRMS again. For a
+Sentinel-2 result, the existing transparent flood/water mask is placed over the exact
+analyzed bounding box as a Mapbox image source using the north-up corner order. Manual
+upload masks are summarized but are not placed geographically because their orientation
+has not been verified. The cyan pixels represent only model-classified water/flood
+pixels, not depth or severity.
+
+The Route map also groups the mask into a coarse grid of at most `32 x 32` cells and
+darkens cells containing a higher share of model-classified flood/water pixels. Cells
+below eight percent local coverage are omitted from this density emphasis. This is
+called flood/water pixel density and must not be interpreted as water depth, flow,
+verified severity, or danger.
+
+FIRMS detections with positive FRP values are displayed with a Mapbox heatmap at their
+returned longitude and latitude. Relative heat weight is
+`log1p(FRP) / log1p(max FRP in the result)`, which reduces the visual effect of an
+extreme outlier. The amber-to-dark-red visualization represents relative FIRMS FRP
+intensity; it is not a fire perimeter, persistence claim, or absolute danger score.
+
+Flood and fire layers can be toggled independently and are drawn below the recommended
+road route. They are visualization-only: neither the SegFormer mask nor FIRMS FRP is
+sent to the routing endpoint or used by Dijkstra weights. See the
+[NASA FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/) for the provider
+contract.
 
 ## Stretch Features
 

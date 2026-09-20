@@ -504,50 +504,73 @@ class RoadRoutingTests(unittest.TestCase):
         self.assertGreater(east, -79.0)
         self.assertLess(west, -81.0)
 
+    @patch("road_routing.ox.simplification.simplify_graph")
+    @patch("road_routing.ox.truncate.largest_component")
+    @patch("road_routing.ox.truncate.truncate_graph_polygon")
+    @patch("road_routing._create_graph")
+    @patch("road_routing.requests.post")
+    def test_bounded_overpass_query_uses_correct_coordinate_order(
+        self, post, create_graph, truncate_graph, largest_component, simplify_graph
+    ):
+        from road_routing import _download_overpass_graph
+
+        response = MagicMock()
+        response.json.return_value = {
+            "elements": [
+                {"type": "node", "id": 1, "lat": 37.0, "lon": -80.0},
+                {"type": "node", "id": 2, "lat": 37.1, "lon": -79.9},
+                {"type": "way", "id": 10, "nodes": [1, 2], "tags": {"highway": "primary"}},
+                {"type": "way", "id": 11, "nodes": [2, 3], "tags": {"highway": "service"}},
+            ]
+        }
+        post.return_value = response
+        graph = nx.MultiDiGraph()
+        create_graph.return_value = graph
+        truncate_graph.return_value = graph
+        largest_component.return_value = graph
+        simplify_graph.return_value = graph
+
+        result = _download_overpass_graph(
+            "https://overpass.example/api", -81.0, 36.0, -79.0, 38.0, 12
+        )
+
+        self.assertIs(result, graph)
+        request = post.call_args
+        self.assertEqual(request.args[0], "https://overpass.example/api/interpreter")
+        self.assertEqual(request.kwargs["timeout"], 12)
+        self.assertIn("(36.0,-81.0,38.0,-79.0)", request.kwargs["data"]["data"])
+        response.raise_for_status.assert_called_once_with()
+        forwarded_elements = create_graph.call_args.args[0][0]["elements"]
+        self.assertEqual([element["id"] for element in forwarded_elements], [1, 2, 10])
+
     @patch("road_routing.ox.add_edge_travel_times")
     @patch("road_routing.ox.add_edge_speeds")
-    @patch("road_routing.ox.graph_from_bbox")
-    def test_download_uses_installed_osmnx_bbox_keyword_order(
-        self, graph_from_bbox, add_edge_speeds, add_edge_travel_times
+    @patch("road_routing._download_overpass_graph")
+    def test_download_retries_the_next_overpass_endpoint(
+        self, download_overpass_graph, add_edge_speeds, add_edge_travel_times
     ):
         from road_routing import _download_drive_graph
 
         graph = nx.MultiDiGraph()
-        graph_from_bbox.return_value = graph
+        download_overpass_graph.side_effect = [ConnectionError("first endpoint unavailable"), graph]
         add_edge_speeds.return_value = graph
         add_edge_travel_times.return_value = graph
         _download_drive_graph.cache_clear()
 
-        _download_drive_graph(-81.0, 36.0, -79.0, 38.0)
+        with patch.dict("os.environ", {
+            "OSMNX_OVERPASS_URLS": "https://first.example/api,https://second.example/api",
+            "OSMNX_REQUEST_TIMEOUT_SECONDS": "12",
+        }):
+            with self.assertLogs("road_routing", level="WARNING") as logs:
+                result = _download_drive_graph(-81.0, 36.0, -79.0, 38.0)
 
-        graph_from_bbox.assert_called_once_with(
-            bbox=(38.0, 36.0, -79.0, -81.0),
-            network_type="drive",
-            simplify=True,
+        self.assertIs(result, graph)
+        self.assertEqual(download_overpass_graph.call_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in download_overpass_graph.call_args_list],
+            ["https://first.example/api", "https://second.example/api"],
         )
-
-    @patch("road_routing.ox.__version__", "2.0.0")
-    @patch("road_routing.ox.add_edge_travel_times")
-    @patch("road_routing.ox.add_edge_speeds")
-    @patch("road_routing.ox.graph_from_bbox")
-    def test_download_uses_west_south_east_north_for_osmnx_v2(
-        self, graph_from_bbox, add_edge_speeds, add_edge_travel_times
-    ):
-        from road_routing import _download_drive_graph
-
-        graph = nx.MultiDiGraph()
-        graph_from_bbox.return_value = graph
-        add_edge_speeds.return_value = graph
-        add_edge_travel_times.return_value = graph
-        _download_drive_graph.cache_clear()
-
-        _download_drive_graph(-81.0, 36.0, -79.0, 38.0)
-
-        graph_from_bbox.assert_called_once_with(
-            bbox=(-81.0, 36.0, -79.0, 38.0),
-            network_type="drive",
-            simplify=True,
-        )
+        self.assertTrue(any("endpoint=1/2" in line for line in logs.output))
 
     @patch("road_routing.ox.distance.nearest_nodes", side_effect=[1, 3])
     @patch("road_routing._download_drive_graph")

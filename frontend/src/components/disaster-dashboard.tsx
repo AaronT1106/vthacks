@@ -27,6 +27,8 @@ import { RouteRecommendationPanel } from "@/src/components/route-recommendation-
 import { ThreeDimensionalGlobe } from "@/src/components/three-dimensional-globe"
 import { WhatChangedFeed } from "@/src/components/what-changed-feed"
 import { WorkflowProgress, type WorkflowStep } from "@/src/components/workflow-progress"
+import type { FireHotspotResult } from "@/src/lib/fire-hotspots"
+import type { FloodAnalysisResult } from "@/src/lib/flood-analysis"
 import { analyzeCoordinateRoute, analyzeRoute } from "@/src/lib/route-analysis"
 import {
   defaultMapLayers,
@@ -67,6 +69,10 @@ function boundsMateriallyChanged(current: DisasterAreaBounds, next: DisasterArea
     || Math.abs(current.north - next.north) > BOUNDS_CHANGE_TOLERANCE
 }
 
+function analysisBoundsMatch(current: DisasterAreaBounds | null, result: DisasterAreaBounds) {
+  return Boolean(current && !boundsMateriallyChanged(current, result))
+}
+
 function formatFeedTime(date: Date) {
   return date.toLocaleTimeString([], {
     hour12: false,
@@ -87,6 +93,9 @@ export function DisasterDashboard() {
     manual: { beforeImage: null, afterImage: null },
   })
   const [damageAnalysisResult, setDamageAnalysisResult] = useState<DemoDamageAnalysisResult | null>(null)
+  const [floodAnalysisResult, setFloodAnalysisResult] = useState<FloodAnalysisResult | null>(null)
+  const [fireHotspotResult, setFireHotspotResult] = useState<FireHotspotResult | null>(null)
+  const [floodOverlayStatus, setFloodOverlayStatus] = useState("")
   const [pendingAreaChange, setPendingAreaChange] = useState<PendingAreaChange | null>(null)
   const [responderMode, setResponderMode] = useState<ResponderMode>("ambulance")
   const [startingPlace, setStartingPlace] = useState<SelectedPlace | null>(() =>
@@ -136,16 +145,21 @@ export function DisasterDashboard() {
   const usesPresetRoute = Boolean(startingPlace?.presetId && destinationPlace?.presetId)
   const isAnalyzing = analysisStatus === "analyzing"
   const routeLocationsMissing = !canAnalyzeRoute
+  const currentFloodResult = floodAnalysisResult && analysisBoundsMatch(disasterAreaBounds, {
+    west: floodAnalysisResult.acquisition.bbox[0],
+    south: floodAnalysisResult.acquisition.bbox[1],
+    east: floodAnalysisResult.acquisition.bbox[2],
+    north: floodAnalysisResult.acquisition.bbox[3],
+  }) ? floodAnalysisResult : null
+  const currentFireResult = fireHotspotResult && analysisBoundsMatch(disasterAreaBounds, fireHotspotResult.bounds)
+    ? fireHotspotResult
+    : null
 
   useEffect(() => {
     return () => {
       activeRequest.current?.abort()
       activeRequest.current = null
     }
-  }, [])
-
-  const handleHazardSelection = useCallback((hazard: Hazard) => {
-    setSelectedHazardId(hazard.id)
   }, [])
 
   const closeEvidence = useCallback(() => setEvidenceSelection(null), [])
@@ -227,6 +241,9 @@ export function DisasterDashboard() {
     setDisasterAreaBounds(bounds)
     setDisasterAreaPlace(place)
     setDamageAnalysisResult(null)
+    setFloodAnalysisResult(null)
+    setFireHotspotResult(null)
+    setFloodOverlayStatus("")
     setWorkflowStep("imagery")
   }
 
@@ -354,7 +371,14 @@ export function DisasterDashboard() {
           bounds={disasterAreaBounds}
           place={disasterAreaPlace}
           imagery={disasterImagery}
+          floodResult={currentFloodResult}
+          fireResult={currentFireResult}
           onBack={() => setWorkflowStep("imagery")}
+          onFloodResultChange={(result) => {
+            setFloodAnalysisResult(result)
+            setFloodOverlayStatus("")
+          }}
+          onFireResultChange={setFireHotspotResult}
           onComplete={(result) => {
             setDamageAnalysisResult(result)
             resetAnalysis()
@@ -391,6 +415,53 @@ export function DisasterDashboard() {
         <div className="grid min-h-0 flex-1 grid-cols-1 xl:h-[calc(100vh-3.5rem)] xl:grid-cols-[280px_minmax(420px,1fr)_340px]">
           <aside className="order-1 border-b border-white/[0.07] bg-[#080c13] xl:overflow-y-auto xl:border-b-0 xl:border-r">
             <div className="p-4">
+              {(currentFloodResult || currentFireResult) && (
+                <section className="mb-5 rounded-xl border border-white/[0.08] bg-white/[0.025] p-3" aria-labelledby="hazard-layers-summary-heading">
+                  <h2 id="hazard-layers-summary-heading" className="text-xs font-semibold text-white">Hazard layers</h2>
+                  {currentFloodResult && (
+                    <div className="mt-3 border-t border-white/[0.06] pt-3">
+                      <div className="flex items-center justify-between gap-3 text-[11px]">
+                        <span className="font-medium text-cyan-300">Flood / water</span>
+                        <span className="text-slate-500">SegFormer-B0</span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        Potential flood/water coverage: {currentFloodResult.flood.floodCoveragePercent.toFixed(2)}%
+                      </p>
+                      {currentFloodResult.acquisition.source === "satellite" && currentFloodResult.flood.floodPixelCount > 0 && (
+                        <p className="mt-1 text-[10px] leading-4 text-slate-500">Darker cyan cells show higher local flood/water pixel density, not water depth or danger.</p>
+                      )}
+                      {currentFloodResult.flood.floodPixelCount === 0 && (
+                        <p className="mt-1 text-[10px] leading-4 text-slate-500">No flood/water pixels were classified in the analyzed image.</p>
+                      )}
+                      {currentFloodResult.acquisition.source === "manual" && (
+                        <p className="mt-1 text-[10px] leading-4 text-amber-200/80">Map alignment unavailable because manual imagery georeferencing was not verified.</p>
+                      )}
+                      {floodOverlayStatus && <p className="mt-1 text-[10px] leading-4 text-amber-200/80">{floodOverlayStatus}</p>}
+                    </div>
+                  )}
+                  {currentFireResult && (
+                    <div className="mt-3 border-t border-white/[0.06] pt-3">
+                      <div className="flex items-center justify-between gap-3 text-[11px]">
+                        <span className="font-medium text-orange-300">Active fire</span>
+                        <span className="text-slate-500">NASA FIRMS · VIIRS</span>
+                      </div>
+                      <p className="mt-1 text-[10px] text-slate-400">
+                        {currentFireResult.detectionCount} active-fire {currentFireResult.detectionCount === 1 ? "detection" : "detections"}
+                      </p>
+                      {currentFireResult.detectionCount === 0 && (
+                        <p className="mt-1 text-[10px] leading-4 text-slate-500">No active-fire detections returned for the selected area and time window.</p>
+                      )}
+                      {currentFireResult.detectionCount > 0 && !currentFireResult.detections.some((detection) => detection.frp !== null && detection.frp > 0) && (
+                        <p className="mt-1 text-[10px] leading-4 text-slate-500">No positive FRP values are available for a relative intensity heatmap.</p>
+                      )}
+                    </div>
+                  )}
+                  {!mapboxToken && (
+                    <p className="mt-3 border-t border-white/[0.06] pt-3 text-[10px] leading-4 text-slate-500">Accurate geographic hazard overlays require Mapbox.</p>
+                  )}
+                  <p className="mt-3 text-[9px] leading-4 text-slate-600">Visual layers do not change road-routing weights or represent flood depth, fire perimeter, or absolute danger.</p>
+                </section>
+              )}
               {damageAnalysisResult && (
                 <section className="mb-5 rounded-xl border border-cyan-400/15 bg-cyan-400/[0.04] p-3" aria-labelledby="selected-area-route-heading">
                   <div className="flex items-center justify-between gap-3">
@@ -559,7 +630,12 @@ export function DisasterDashboard() {
                   <h2 id="map-layers-heading" className="section-label">Map layers</h2>
                   <Activity className="size-3.5 text-slate-600" aria-hidden="true" />
                 </div>
-                <MapLayerControls layers={mapLayers} onToggle={handleMapLayerToggle} />
+                <MapLayerControls
+                  layers={mapLayers}
+                  onToggle={handleMapLayerToggle}
+                  showFloodAnalysis={Boolean(currentFloodResult)}
+                  showActiveFire={Boolean(currentFireResult)}
+                />
               </section>
 
               <div className="mt-6 hidden xl:block"><LiveDataSources /></div>
@@ -572,12 +648,13 @@ export function DisasterDashboard() {
                 layers={mapLayers}
                 analysisComplete={analysisStatus === "complete"}
                 recommendedRoute={analysisResult?.route ?? null}
-                selectedHazardId={selectedHazard.id}
-                onSelectHazard={handleHazardSelection}
                 startingPlace={startingPlace}
                 destinationPlace={displayedDestinationPlace}
                 destinationType={displayedDestinationType}
                 disasterAreaBounds={disasterAreaBounds}
+                floodAnalysisResult={currentFloodResult}
+                fireHotspotResult={currentFireResult}
+                onFloodOverlayStatusChange={setFloodOverlayStatus}
               />
             ) : (
               <section className="flex-1 overflow-y-auto bg-[#070b12] p-4 sm:p-6 lg:p-8">
@@ -598,6 +675,7 @@ export function DisasterDashboard() {
                     <RouteRecommendationPanel
                       status={analysisStatus}
                       recommendation={analysisResult?.recommendation ?? null}
+                      route={analysisResult?.route ?? null}
                       error={analysisError}
                       onViewEvidence={viewRecommendationEvidence}
                     />
@@ -621,7 +699,7 @@ export function DisasterDashboard() {
             <div className="space-y-3 p-3">
               {activeTab === "situation-map" && (
                 <>
-                  <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} error={analysisError} onViewEvidence={viewRecommendationEvidence} />
+                  <RouteRecommendationPanel status={analysisStatus} recommendation={analysisResult?.recommendation ?? null} route={analysisResult?.route ?? null} error={analysisError} onViewEvidence={viewRecommendationEvidence} />
                   <DamageDetailsPanel hazard={selectedHazard} onViewEvidence={viewHazardEvidence} />
                 </>
               )}

@@ -26,21 +26,27 @@ export function DisasterAnalysisStep({
   bounds,
   place,
   imagery,
+  floodResult,
+  fireResult,
   onBack,
+  onFloodResultChange,
+  onFireResultChange,
   onComplete,
 }: {
   bounds: DisasterAreaBounds
   place: SelectedPlace | null
   imagery: DisasterImagery
+  floodResult: FloodAnalysisResult | null
+  fireResult: FireHotspotResult | null
   onBack: () => void
+  onFloodResultChange: (result: FloodAnalysisResult | null) => void
+  onFireResultChange: (result: FireHotspotResult | null) => void
   onComplete: (result: DemoDamageAnalysisResult) => void
 }) {
-  const [floodStatus, setFloodStatus] = useState<AnalysisRequestStatus>("idle")
-  const [floodResult, setFloodResult] = useState<FloodAnalysisResult | null>(null)
+  const [floodStatus, setFloodStatus] = useState<AnalysisRequestStatus>(floodResult ? "success" : "idle")
   const [maskError, setMaskError] = useState(false)
   const [floodError, setFloodError] = useState("")
-  const [fireStatus, setFireStatus] = useState<AnalysisRequestStatus>("idle")
-  const [fireResult, setFireResult] = useState<FireHotspotResult | null>(null)
+  const [fireStatus, setFireStatus] = useState<AnalysisRequestStatus>(fireResult ? "success" : "idle")
   const [fireError, setFireError] = useState("")
   const floodRequest = useRef<AbortController | null>(null)
   const fireRequest = useRef<AbortController | null>(null)
@@ -130,14 +136,6 @@ export function DisasterAnalysisStep({
               confidence: 88,
               affectedInfrastructure: ["Primary road access", "Emergency vehicle corridor"],
             },
-            {
-              id: `demo-bridge-${centerLongitude.toFixed(4)}-${centerLatitude.toFixed(4)}`,
-              name: "Potential Bridge Access Damage",
-              type: "bridge-damage",
-              severity: "MEDIUM",
-              confidence: 81,
-              affectedInfrastructure: ["Bridge crossing", "Supply route"],
-            },
           ]
         : [
             {
@@ -147,14 +145,6 @@ export function DisasterAnalysisStep({
               severity: "HIGH",
               confidence: 82,
               affectedInfrastructure: ["Primary road access", "Emergency vehicle corridor"],
-            },
-            {
-              id: `demo-sentinel-bridge-${centerLongitude.toFixed(4)}-${centerLatitude.toFixed(4)}`,
-              name: "Potential Bridge Access Damage",
-              type: "bridge-damage",
-              severity: "MEDIUM",
-              confidence: 76,
-              affectedInfrastructure: ["Bridge crossing", "Supply route"],
             },
           ],
     }
@@ -207,7 +197,7 @@ export function DisasterAnalysisStep({
     const controller = new AbortController()
     floodRequest.current = controller
     setFloodStatus("loading")
-    setFloodResult(null)
+    onFloodResultChange(null)
     setMaskError(false)
     setFloodError("")
     const timeout = window.setTimeout(() => controller.abort(), 120000)
@@ -219,7 +209,7 @@ export function DisasterAnalysisStep({
           : null
       if (!floodResult) throw new Error("No complete imagery pair is available.")
       if (floodRequest.current !== controller) return
-      setFloodResult(floodResult)
+      onFloodResultChange(floodResult)
       setFloodStatus("success")
     } catch (error) {
       if (floodRequest.current !== controller) return
@@ -242,13 +232,13 @@ export function DisasterAnalysisStep({
     const controller = new AbortController()
     fireRequest.current = controller
     setFireStatus("loading")
-    setFireResult(null)
+    onFireResultChange(null)
     setFireError("")
     const timeout = window.setTimeout(() => controller.abort(), 35000)
     try {
       const nextResult = await fetchFireHotspots(bounds, controller.signal)
       if (fireRequest.current !== controller) return
-      setFireResult(nextResult)
+      onFireResultChange(nextResult)
       setFireStatus("success")
     } catch (error) {
       if (fireRequest.current !== controller) return

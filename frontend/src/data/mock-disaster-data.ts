@@ -17,7 +17,7 @@ export type ResponderMode =
   | "supply-vehicle"
   | "emergency-coordinator"
 
-export type HazardType = "flooding" | "bridge-damage"
+export type HazardType = "flooding"
 export type Severity = "LOW" | "MEDIUM" | "HIGH"
 
 export type DestinationType =
@@ -163,9 +163,9 @@ export interface RouteAnalysisResponse extends RouteAnalysisRequest {
 }
 
 export interface MapLayerVisibility {
-  flooding: boolean
-  bridgeDamage: boolean
   risk: boolean
+  floodAnalysis: boolean
+  activeFire: boolean
   safeRoute: boolean
   hospitals: boolean
   shelters: boolean
@@ -283,26 +283,6 @@ export const hazards: Hazard[] = [
       [-80.419, 37.2225],
     ],
   },
-  {
-    id: "south-main-bridge-damage",
-    name: "Bridge Damage",
-    type: "bridge-damage",
-    severity: "MEDIUM",
-    confidence: 88,
-    detected: "1 min ago",
-    source: "Drone inspection imagery",
-    verification: "Preliminary detection",
-    impact: "Possible bridge damage may restrict heavy vehicles and interrupt the South Main supply corridor.",
-    affected: ["South Main Street bridge", "Heavy vehicle corridor"],
-    coordinates: [-80.4064, 37.2169],
-    polygon: [
-      [-80.4078, 37.218],
-      [-80.4053, 37.2177],
-      [-80.405, 37.216],
-      [-80.4074, 37.2158],
-      [-80.4078, 37.218],
-    ],
-  },
 ]
 
 export const initialChangeEvents: ChangeEvent[] = [
@@ -345,9 +325,9 @@ export const liveDataSources: LiveDataSource[] = [
 ]
 
 export const defaultMapLayers: MapLayerVisibility = {
-  flooding: true,
-  bridgeDamage: true,
   risk: true,
+  floodAnalysis: true,
+  activeFire: true,
   safeRoute: true,
   hospitals: true,
   shelters: true,

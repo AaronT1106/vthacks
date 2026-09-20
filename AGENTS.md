@@ -22,6 +22,8 @@ Before making any code changes:
 - Prefer straightforward solutions over clever or overly complex solutions.
 - Add comments only when they help explain non-obvious logic.
 - Follow the existing project structure and naming style.
+- When adding a new third-party Python import, add its runtime dependency to `backend/requirements.txt` in the same change. Test-only dependencies belong in `backend/requirements-dev.txt`.
+- After pulling backend changes, run `backend/setup.sh` or synchronize the active Python 3.12 virtual environment before starting FastAPI.
 
 ## Before Creating Something New
 

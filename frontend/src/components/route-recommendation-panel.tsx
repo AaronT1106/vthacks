@@ -1,10 +1,11 @@
 import { motion } from "framer-motion"
-import { AlertTriangle, Check, Clock3, Eye, Gauge, MapPinned, ShieldCheck } from "lucide-react"
-import { responderModes, type RouteRecommendation } from "@/src/data/mock-disaster-data"
+import { AlertTriangle, Check, Clock3, Eye, Gauge, MapPinned, Navigation, ShieldCheck } from "lucide-react"
+import { responderModes, type Route, type RouteRecommendation } from "@/src/data/mock-disaster-data"
 
 interface RouteRecommendationPanelProps {
   status: "idle" | "analyzing" | "complete" | "error"
   recommendation: RouteRecommendation | null
+  route: Route | null
   error: string
   onViewEvidence?: () => void
 }
@@ -12,6 +13,7 @@ interface RouteRecommendationPanelProps {
 export function RouteRecommendationPanel({
   status,
   recommendation,
+  route,
   error,
   onViewEvidence,
 }: RouteRecommendationPanelProps) {
@@ -62,6 +64,7 @@ export function RouteRecommendationPanel({
     rejectionReason: "The route-analysis response did not include an alternative route.",
   }
   const responderLabel = responderModes.find((mode) => mode.id === recommendation.role)?.label ?? "Responder"
+  const googleMapsUrl = route ? createGoogleMapsDirectionsUrl(route) : null
 
   return (
     <motion.section
@@ -82,7 +85,20 @@ export function RouteRecommendationPanel({
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recommendation.routeName}</p>
           <p className="mt-1 text-[11px] text-slate-400">To {recommendation.recommendedDestination}</p>
         </div>
-        <span className="mock-badge">OSM roads · demo hazards</span>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <span className="mock-badge">OSM roads · demo hazards</span>
+          {googleMapsUrl && (
+            <a
+              href={googleMapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-400 px-4 py-2 text-xs font-semibold text-slate-950 transition-colors hover:bg-emerald-300"
+              title="Open this route in Google Maps"
+            >
+              Go <Navigation className="size-3.5" aria-hidden="true" />
+            </a>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800">
@@ -141,6 +157,34 @@ export function RouteRecommendationPanel({
       </div>
     </motion.section>
   )
+}
+
+function createGoogleMapsDirectionsUrl(route: Route) {
+  const coordinates = route.geometry.coordinates
+  const origin = coordinates[0]
+  const destination = coordinates.at(-1)
+  if (!origin || !destination) return null
+
+  // Google Maps URLs support at most three waypoints on mobile browsers. Sampling
+  // three interior road-route points keeps the handoff cross-platform and under the
+  // documented URL-length limit while allowing Google Maps to recalculate navigation.
+  const waypointIndexes = Array.from({ length: 3 }, (_, index) => (
+    Math.round(((index + 1) * (coordinates.length - 1)) / 4)
+  )).filter((index, position, indexes) => (
+    index > 0 && index < coordinates.length - 1 && indexes.indexOf(index) === position
+  ))
+  const formatCoordinate = ([longitude, latitude]: [number, number]) => `${latitude},${longitude}`
+  const parameters = new URLSearchParams({
+    api: "1",
+    origin: formatCoordinate(origin),
+    destination: formatCoordinate(destination),
+    travelmode: "driving",
+    dir_action: "navigate",
+  })
+  if (waypointIndexes.length > 0) {
+    parameters.set("waypoints", waypointIndexes.map((index) => formatCoordinate(coordinates[index])).join("|"))
+  }
+  return `https://www.google.com/maps/dir/?${parameters.toString()}`
 }
 
 function Metric({

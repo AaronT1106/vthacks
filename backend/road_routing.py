@@ -3,14 +3,26 @@
 from functools import lru_cache
 import logging
 import math
+import os
 from typing import Any
-import warnings
 
 import networkx as nx
 import osmnx as ox
-from shapely.geometry import LineString, Polygon
+import requests
+from osmnx.graph import _create_graph
+from shapely.geometry import LineString, Polygon, box
 
 logger = logging.getLogger(__name__)
+DEFAULT_OVERPASS_URLS = (
+    "https://overpass.maprva.org/api",
+    "https://overpass.private.coffee/api",
+    "https://overpass-api.de/api",
+)
+DRIVE_HIGHWAY_FILTER = (
+    "motorway|motorway_link|trunk|trunk_link|primary|primary_link|"
+    "secondary|secondary_link|tertiary|tertiary_link|unclassified|"
+    "residential|living_street|service"
+)
 
 
 class RoadNetworkUnavailableError(RuntimeError):
@@ -45,20 +57,106 @@ def _query_bounds(
     )
 
 
+def _download_overpass_graph(
+    overpass_url: str,
+    west: float,
+    south: float,
+    east: float,
+    north: float,
+    request_timeout: int,
+) -> nx.MultiDiGraph:
+    """Fetch a bounded road query and build the OSMnx graph locally."""
+    query = f"""
+[out:json][timeout:{request_timeout}];
+(
+  way["highway"~"{DRIVE_HIGHWAY_FILTER}"]["area"!="yes"]["access"!="private"]
+    ({south},{west},{north},{east});
+  >;
+);
+out;
+""".strip()
+    response = requests.post(
+        f"{overpass_url.rstrip('/')}/interpreter",
+        data={"data": query},
+        timeout=request_timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("elements"), list):
+        raise ValueError("Overpass returned an invalid road-network response.")
+    if payload.get("remark"):
+        raise RuntimeError(f"Overpass rejected the road-network query: {payload['remark']}")
+
+    node_ids = {
+        element.get("id")
+        for element in payload["elements"]
+        if element.get("type") == "node"
+    }
+    filtered_elements = []
+    incomplete_way_count = 0
+    for element in payload["elements"]:
+        if element.get("type") == "way" and any(
+            node_id not in node_ids for node_id in element.get("nodes", [])
+        ):
+            incomplete_way_count += 1
+            continue
+        filtered_elements.append(element)
+    if incomplete_way_count:
+        logger.warning(
+            "Ignored incomplete Overpass ways count=%s",
+            incomplete_way_count,
+        )
+    if not any(element.get("type") == "way" for element in filtered_elements):
+        raise ValueError("Overpass returned no complete drivable roads for this area.")
+
+    payload["elements"] = filtered_elements
+    graph = _create_graph([payload], bidirectional=False)
+    graph = ox.truncate.truncate_graph_polygon(
+        graph,
+        box(west, south, east, north),
+        truncate_by_edge=True,
+    )
+    graph = ox.truncate.largest_component(graph, strongly=False)
+    return ox.simplification.simplify_graph(graph)
+
+
 @lru_cache(maxsize=8)
 def _download_drive_graph(west: float, south: float, east: float, north: float) -> nx.MultiDiGraph:
-    if int(ox.__version__.split(".", 1)[0]) >= 2:
-        bbox = (west, south, east, north)
-        graph = ox.graph_from_bbox(bbox=bbox, network_type="drive", simplify=True)
-    else:
-        bbox = (north, south, east, west)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="The expected order of coordinates in `bbox` will change",
-                category=FutureWarning,
+    configured_urls = os.getenv("OSMNX_OVERPASS_URLS", "").strip()
+    overpass_urls = tuple(dict.fromkeys(
+        url.strip().rstrip("/")
+        for url in configured_urls.split(",")
+        if url.strip()
+    )) or DEFAULT_OVERPASS_URLS
+    try:
+        request_timeout = int(os.getenv("OSMNX_REQUEST_TIMEOUT_SECONDS", "25"))
+    except ValueError:
+        request_timeout = 25
+    request_timeout = min(60, max(5, request_timeout))
+    last_error: Exception | None = None
+    for endpoint_index, overpass_url in enumerate(overpass_urls, start=1):
+        try:
+            graph = _download_overpass_graph(
+                overpass_url,
+                west,
+                south,
+                east,
+                north,
+                request_timeout,
             )
-            graph = ox.graph_from_bbox(bbox=bbox, network_type="drive", simplify=True)
+            break
+        except Exception as error:
+            last_error = error
+            logger.warning(
+                "Overpass road graph request failed endpoint=%s/%s error_type=%s",
+                endpoint_index,
+                len(overpass_urls),
+                type(error).__name__,
+            )
+    else:
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("No Overpass endpoint is configured.")
     graph = ox.add_edge_speeds(graph)
     return ox.add_edge_travel_times(graph)
 

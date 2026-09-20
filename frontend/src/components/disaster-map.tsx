@@ -2,16 +2,17 @@
 
 import { useEffect, useRef, useState } from "react"
 import {
-  AlertTriangle,
   Building2,
   LocateFixed,
   MapPin,
   Navigation,
   TentTree,
-  Waves,
 } from "lucide-react"
 import type { FeatureCollection, LineString, Point, Polygon } from "geojson"
-import type { GeoJSONSource, Map as MapboxMap } from "mapbox-gl"
+import type { GeoJSONSource, ImageSource, Map as MapboxMap } from "mapbox-gl"
+import type { FireHotspotResult } from "@/src/lib/fire-hotspots"
+import { createFloodDensityGrid, type FloodDensityProperties } from "@/src/lib/flood-density"
+import type { FloodAnalysisResult } from "@/src/lib/flood-analysis"
 import {
   hazards,
   hospitals,
@@ -30,23 +31,27 @@ interface DisasterMapProps {
   layers: MapLayerVisibility
   analysisComplete: boolean
   recommendedRoute: Route | null
-  selectedHazardId: string
-  onSelectHazard: (hazard: Hazard) => void
   startingPlace: SelectedPlace | null
   destinationPlace: SelectedPlace | null
   destinationType: DestinationType
   disasterAreaBounds: DisasterAreaBounds | null
+  floodAnalysisResult: FloodAnalysisResult | null
+  fireHotspotResult: FireHotspotResult | null
+  onFloodOverlayStatusChange: (message: string) => void
 }
 
 interface CurrentMapState {
   layers: MapLayerVisibility
   analysisComplete: boolean
   recommendedRoute: Route | null
-  selectedHazardId: string
   startingPlace: SelectedPlace | null
   destinationPlace: SelectedPlace | null
   destinationType: DestinationType
   disasterAreaBounds: DisasterAreaBounds | null
+  floodAnalysisResult: FloodAnalysisResult | null
+  fireHotspotResult: FireHotspotResult | null
+  floodMaskUrl: string | null
+  floodDensityData: FeatureCollection<Polygon, FloodDensityProperties> | null
 }
 
 interface StoredCamera {
@@ -58,9 +63,14 @@ interface StoredCamera {
 
 const DARK_MAP_STYLE = "mapbox://styles/mapbox/dark-v11"
 const SATELLITE_MAP_STYLE = "mapbox://styles/mapbox/satellite-streets-v12"
+const FLOOD_ANALYSIS_SOURCE_ID = "analysis-flood-mask"
+const FLOOD_ANALYSIS_LAYER_ID = "analysis-flood-mask-raster"
+const FLOOD_DENSITY_SOURCE_ID = "analysis-flood-density"
+const FLOOD_DENSITY_LAYER_ID = "analysis-flood-density-fill"
+const FIRE_ANALYSIS_SOURCE_ID = "analysis-fire-hotspots"
+const FIRE_ANALYSIS_LAYER_ID = "analysis-fire-heatmap"
 
 const floodHazard = hazards.find((hazard) => hazard.type === "flooding")!
-const bridgeHazard = hazards.find((hazard) => hazard.type === "bridge-damage")!
 
 function polygonCollection(hazard: Hazard): FeatureCollection<Polygon> {
   return {
@@ -173,6 +183,166 @@ function disasterAreaCollection(bounds: DisasterAreaBounds | null): FeatureColle
   }
 }
 
+function boundsMatchFloodResult(result: FloodAnalysisResult, bounds: DisasterAreaBounds | null) {
+  if (!bounds) return false
+  const [west, south, east, north] = result.acquisition.bbox
+  return Math.abs(bounds.west - west) <= 0.000001
+    && Math.abs(bounds.south - south) <= 0.000001
+    && Math.abs(bounds.east - east) <= 0.000001
+    && Math.abs(bounds.north - north) <= 0.000001
+}
+
+function boundsMatchFireResult(result: FireHotspotResult, bounds: DisasterAreaBounds | null) {
+  if (!bounds) return false
+  return Math.abs(bounds.west - result.bounds.west) <= 0.000001
+    && Math.abs(bounds.south - result.bounds.south) <= 0.000001
+    && Math.abs(bounds.east - result.bounds.east) <= 0.000001
+    && Math.abs(bounds.north - result.bounds.north) <= 0.000001
+}
+
+function fireHotspotCollection(result: FireHotspotResult | null): FeatureCollection<Point> {
+  const detections = result?.detections.filter((detection) => (
+    detection.frp !== null && Number.isFinite(detection.frp) && detection.frp > 0
+  )) ?? []
+  const maximumFrp = Math.max(0, ...detections.map((detection) => detection.frp ?? 0))
+  const normalization = Math.log1p(maximumFrp)
+  return {
+    type: "FeatureCollection",
+    features: detections.map((detection) => ({
+      type: "Feature",
+      properties: {
+        frp: detection.frp,
+        weight: normalization > 0 ? Math.log1p(detection.frp ?? 0) / normalization : 0,
+        confidence: detection.confidence,
+        acquiredAt: detection.acquiredAt,
+        source: result?.source.product,
+      },
+      geometry: { type: "Point", coordinates: [detection.longitude, detection.latitude] },
+    })),
+  }
+}
+
+function removeLayerAndSource(map: MapboxMap, layerId: string, sourceId: string) {
+  if (map.getLayer(layerId)) map.removeLayer(layerId)
+  if (map.getSource(sourceId)) map.removeSource(sourceId)
+}
+
+function addLayerBelowRoute(map: MapboxMap, layer: Parameters<MapboxMap["addLayer"]>[0]) {
+  const beforeId = map.getLayer("safe-route-line-shadow") ? "safe-route-line-shadow" : undefined
+  if (beforeId) map.addLayer(layer, beforeId)
+  else map.addLayer(layer)
+}
+
+function synchronizeAnalysisLayers(map: MapboxMap, currentState: CurrentMapState) {
+  const floodResult = currentState.floodAnalysisResult
+  const canShowFlood = Boolean(
+    floodResult
+    && floodResult.acquisition.source === "satellite"
+    && floodResult.flood.floodPixelCount > 0
+    && floodResult.mask.width === floodResult.image.width
+    && floodResult.mask.height === floodResult.image.height
+    && boundsMatchFloodResult(floodResult, currentState.disasterAreaBounds)
+    && currentState.floodMaskUrl,
+  )
+
+  if (!canShowFlood || !floodResult || !currentState.floodMaskUrl) {
+    removeLayerAndSource(map, FLOOD_ANALYSIS_LAYER_ID, FLOOD_ANALYSIS_SOURCE_ID)
+    removeLayerAndSource(map, FLOOD_DENSITY_LAYER_ID, FLOOD_DENSITY_SOURCE_ID)
+  } else {
+    const [west, south, east, north] = floodResult.acquisition.bbox
+    const coordinates: [Coordinates, Coordinates, Coordinates, Coordinates] = [
+      [west, north],
+      [east, north],
+      [east, south],
+      [west, south],
+    ]
+    const source = map.getSource(FLOOD_ANALYSIS_SOURCE_ID) as ImageSource | undefined
+    if (source) source.updateImage({ url: currentState.floodMaskUrl, coordinates })
+    else {
+      map.addSource(FLOOD_ANALYSIS_SOURCE_ID, {
+        type: "image",
+        url: currentState.floodMaskUrl,
+        coordinates,
+      })
+      addLayerBelowRoute(map, {
+        id: FLOOD_ANALYSIS_LAYER_ID,
+        type: "raster",
+        source: FLOOD_ANALYSIS_SOURCE_ID,
+        paint: { "raster-opacity": 0.72, "raster-fade-duration": 0 },
+      })
+    }
+    setLayerVisibility(map, FLOOD_ANALYSIS_LAYER_ID, currentState.layers.floodAnalysis)
+
+    const densityData = currentState.floodDensityData
+    if (!densityData || densityData.features.length === 0) {
+      removeLayerAndSource(map, FLOOD_DENSITY_LAYER_ID, FLOOD_DENSITY_SOURCE_ID)
+    } else {
+      const densitySource = map.getSource(FLOOD_DENSITY_SOURCE_ID) as GeoJSONSource | undefined
+      if (densitySource) densitySource.setData(densityData)
+      else {
+        map.addSource(FLOOD_DENSITY_SOURCE_ID, { type: "geojson", data: densityData })
+        addLayerBelowRoute(map, {
+          id: FLOOD_DENSITY_LAYER_ID,
+          type: "fill",
+          source: FLOOD_DENSITY_SOURCE_ID,
+          paint: {
+            "fill-color": [
+              "interpolate", ["linear"], ["get", "density"],
+              0.08, "#67e8f9",
+              0.35, "#22d3ee",
+              0.7, "#0891b2",
+              1, "#164e63",
+            ],
+            "fill-opacity": [
+              "interpolate", ["linear"], ["get", "density"],
+              0.08, 0.08,
+              0.35, 0.22,
+              0.7, 0.42,
+              1, 0.62,
+            ],
+          },
+        })
+      }
+      setLayerVisibility(map, FLOOD_DENSITY_LAYER_ID, currentState.layers.floodAnalysis)
+    }
+  }
+
+  const fireResult = currentState.fireHotspotResult
+  const fireData = fireHotspotCollection(
+    fireResult && boundsMatchFireResult(fireResult, currentState.disasterAreaBounds) ? fireResult : null,
+  )
+  if (fireData.features.length === 0) {
+    removeLayerAndSource(map, FIRE_ANALYSIS_LAYER_ID, FIRE_ANALYSIS_SOURCE_ID)
+  } else {
+    const source = map.getSource(FIRE_ANALYSIS_SOURCE_ID) as GeoJSONSource | undefined
+    if (source) source.setData(fireData)
+    else {
+      map.addSource(FIRE_ANALYSIS_SOURCE_ID, { type: "geojson", data: fireData })
+      addLayerBelowRoute(map, {
+        id: FIRE_ANALYSIS_LAYER_ID,
+        type: "heatmap",
+        source: FIRE_ANALYSIS_SOURCE_ID,
+        maxzoom: 18,
+        paint: {
+          "heatmap-weight": ["get", "weight"],
+          "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 8, 0.7, 15, 1.25],
+          "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 8, 14, 15, 34],
+          "heatmap-opacity": 0.78,
+          "heatmap-color": [
+            "interpolate", ["linear"], ["heatmap-density"],
+            0, "rgba(251, 191, 36, 0)",
+            0.25, "rgba(251, 191, 36, 0.58)",
+            0.5, "rgba(249, 115, 22, 0.72)",
+            0.75, "rgba(220, 38, 38, 0.82)",
+            1, "rgba(127, 29, 29, 0.92)",
+          ],
+        },
+      })
+    }
+    setLayerVisibility(map, FIRE_ANALYSIS_LAYER_ID, currentState.layers.activeFire)
+  }
+}
+
 function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) {
   if (!map.getSource("confirmed-disaster-area")) {
     map.addSource("confirmed-disaster-area", {
@@ -202,33 +372,7 @@ function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) 
     })
   }
 
-  if (!map.getSource("flooding")) {
-    map.addSource("flooding", { type: "geojson", data: polygonCollection(floodHazard) })
-    map.addLayer({
-      id: "flooding-fill",
-      type: "fill",
-      source: "flooding",
-      paint: {
-        "fill-color": "#ef4444",
-        "fill-opacity": 0.3,
-        "fill-outline-color": "#fda4af",
-      },
-    })
-  }
-
-  if (!map.getSource("bridge-damage")) {
-    map.addSource("bridge-damage", { type: "geojson", data: polygonCollection(bridgeHazard) })
-    map.addLayer({
-      id: "bridge-damage-fill",
-      type: "fill",
-      source: "bridge-damage",
-      paint: {
-        "fill-color": "#f59e0b",
-        "fill-opacity": 0.36,
-        "fill-outline-color": "#fcd34d",
-      },
-    })
-  }
+  synchronizeAnalysisLayers(map, currentState)
 
   if (!map.getSource("safe-route")) {
     map.addSource("safe-route", {
@@ -347,6 +491,8 @@ function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) 
   const safeRouteSource = map.getSource("safe-route") as GeoJSONSource | undefined
   safeRouteSource?.setData(routeCollection(currentState.recommendedRoute?.geometry ?? null))
 
+  synchronizeAnalysisLayers(map, currentState)
+
   if (map.getLayer("destination-place-point")) {
     map.setPaintProperty(
       "destination-place-point",
@@ -356,8 +502,6 @@ function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) 
   }
 
   setLayerVisibility(map, "risk-area-fill", currentState.layers.risk)
-  setLayerVisibility(map, "flooding-fill", currentState.layers.flooding)
-  setLayerVisibility(map, "bridge-damage-fill", currentState.layers.bridgeDamage)
   setLayerVisibility(map, "hospital-points", currentState.layers.hospitals)
   setLayerVisibility(map, "shelter-points", currentState.layers.shelters)
   setLayerVisibility(
@@ -371,17 +515,6 @@ function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) 
     currentState.analysisComplete && currentState.layers.safeRoute,
   )
 
-  if (map.getLayer("flooding-fill")) {
-    const floodSelected = currentState.selectedHazardId === floodHazard.id
-    map.setPaintProperty("flooding-fill", "fill-color", floodSelected ? "#fb7185" : "#ef4444")
-    map.setPaintProperty("flooding-fill", "fill-opacity", floodSelected ? 0.48 : 0.3)
-  }
-
-  if (map.getLayer("bridge-damage-fill")) {
-    const bridgeSelected = currentState.selectedHazardId === bridgeHazard.id
-    map.setPaintProperty("bridge-damage-fill", "fill-color", bridgeSelected ? "#fbbf24" : "#f59e0b")
-    map.setPaintProperty("bridge-damage-fill", "fill-opacity", bridgeSelected ? 0.55 : 0.36)
-  }
 }
 
 function muteBasemapLabels(map: MapboxMap) {
@@ -410,12 +543,13 @@ export function DisasterMap({
   layers,
   analysisComplete,
   recommendedRoute,
-  selectedHazardId,
-  onSelectHazard,
   startingPlace,
   destinationPlace,
   destinationType,
   disasterAreaBounds,
+  floodAnalysisResult,
+  fireHotspotResult,
+  onFloodOverlayStatusChange,
 }: DisasterMapProps) {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<MapboxMap | null>(null)
@@ -426,13 +560,26 @@ export function DisasterMap({
     layers,
     analysisComplete,
     recommendedRoute,
-    selectedHazardId,
     startingPlace,
     destinationPlace,
     destinationType,
     disasterAreaBounds,
+    floodAnalysisResult,
+    fireHotspotResult,
+    floodMaskUrl: null,
+    floodDensityData: null,
   })
-  const hazardSelectionHandler = useRef(onSelectHazard)
+  const [loadedFloodMask, setLoadedFloodMask] = useState<{
+    sourceUrl: string
+    objectUrl: string
+    densityData: FeatureCollection<Polygon, FloodDensityProperties> | null
+  } | null>(null)
+  const floodMaskUrl = floodAnalysisResult && loadedFloodMask?.sourceUrl === floodAnalysisResult.mask.url
+    ? loadedFloodMask.objectUrl
+    : null
+  const floodDensityData = floodAnalysisResult && loadedFloodMask?.sourceUrl === floodAnalysisResult.mask.url
+    ? loadedFloodMask.densityData
+    : null
   const [mapFailed, setMapFailed] = useState(false)
   const [mapReady, setMapReady] = useState(false)
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN?.trim() ?? ""
@@ -442,24 +589,83 @@ export function DisasterMap({
       layers,
       analysisComplete,
       recommendedRoute,
-      selectedHazardId,
       startingPlace,
       destinationPlace,
       destinationType,
       disasterAreaBounds,
+      floodAnalysisResult,
+      fireHotspotResult,
+      floodMaskUrl,
+      floodDensityData,
     }
-    hazardSelectionHandler.current = onSelectHazard
   }, [
     analysisComplete,
     destinationPlace,
     destinationType,
     disasterAreaBounds,
+    fireHotspotResult,
+    floodAnalysisResult,
+    floodDensityData,
+    floodMaskUrl,
     layers,
-    onSelectHazard,
     recommendedRoute,
-    selectedHazardId,
     startingPlace,
   ])
+
+  useEffect(() => {
+    const result = floodAnalysisResult
+    if (
+      !mapboxToken
+      || !result
+      || result.acquisition.source !== "satellite"
+      || result.flood.floodPixelCount === 0
+      || result.mask.width !== result.image.width
+      || result.mask.height !== result.image.height
+      || !boundsMatchFloodResult(result, disasterAreaBounds)
+    ) {
+      onFloodOverlayStatusChange("")
+      return
+    }
+
+    const controller = new AbortController()
+    const maskUrl = result.mask.url
+    const [maskWest, maskSouth, maskEast, maskNorth] = result.acquisition.bbox
+    let objectUrl: string | null = null
+    async function loadFloodMask() {
+      try {
+        const response = await fetch(maskUrl, { signal: controller.signal })
+        if (!response.ok) {
+          onFloodOverlayStatusChange(response.status === 404
+            ? "Flood overlay expired. Run flood analysis again."
+            : "Flood overlay is unavailable. Run flood analysis again.")
+          setLoadedFloodMask(null)
+          return
+        }
+        const blob = await response.blob()
+        if (blob.type !== "image/png") throw new Error("Unexpected flood mask format")
+        objectUrl = URL.createObjectURL(blob)
+        const densityData = await createFloodDensityGrid(blob, {
+          west: maskWest,
+          south: maskSouth,
+          east: maskEast,
+          north: maskNorth,
+        }).catch(() => null)
+        if (controller.signal.aborted) return
+        setLoadedFloodMask({ sourceUrl: maskUrl, objectUrl, densityData })
+        onFloodOverlayStatusChange("")
+      } catch {
+        if (controller.signal.aborted) return
+        setLoadedFloodMask(null)
+        onFloodOverlayStatusChange("Flood overlay is unavailable. Run flood analysis again.")
+      }
+    }
+    void loadFloodMask()
+
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [disasterAreaBounds, floodAnalysisResult, mapboxToken, onFloodOverlayStatusChange])
 
   useEffect(() => {
     if (!mapboxToken || !mapContainer.current || mapFailed) return
@@ -528,17 +734,6 @@ export function DisasterMap({
             return
           }
 
-          const clickableLayers = ["flooding-fill", "bridge-damage-fill"].filter((layerId) =>
-            initializedMap?.getLayer(layerId),
-          )
-          if (clickableLayers.length === 0) return
-
-          const clickedFeature = initializedMap.queryRenderedFeatures(event.point, {
-            layers: clickableLayers,
-          })[0]
-          const hazardId = clickedFeature?.properties?.hazardId
-          const selectedHazard = hazards.find((hazard) => hazard.id === hazardId)
-          if (selectedHazard) hazardSelectionHandler.current(selectedHazard)
         })
 
         initializedMap.on("mousemove", (event) => {
@@ -546,8 +741,6 @@ export function DisasterMap({
           const clickableLayers = [
             "starting-place-point",
             "destination-place-point",
-            "flooding-fill",
-            "bridge-damage-fill",
           ].filter((layerId) =>
             initializedMap?.getLayer(layerId),
           )
@@ -578,10 +771,13 @@ export function DisasterMap({
     destinationPlace,
     destinationType,
     disasterAreaBounds,
+    fireHotspotResult,
+    floodAnalysisResult,
+    floodDensityData,
+    floodMaskUrl,
     layers,
     mapReady,
     recommendedRoute,
-    selectedHazardId,
     startingPlace,
   ])
 
@@ -666,12 +862,13 @@ export function DisasterMap({
           layers={layers}
           analysisComplete={analysisComplete}
           recommendedRoute={recommendedRoute}
-          selectedHazardId={selectedHazardId}
-          onSelectHazard={onSelectHazard}
           startingPlace={startingPlace}
           destinationPlace={destinationPlace}
           destinationType={destinationType}
           disasterAreaBounds={disasterAreaBounds}
+          floodAnalysisResult={floodAnalysisResult}
+          fireHotspotResult={fireHotspotResult}
+          onFloodOverlayStatusChange={onFloodOverlayStatusChange}
         />
       ) : (
         <div ref={mapContainer} className="absolute inset-0 min-h-full min-w-full" />
@@ -688,7 +885,7 @@ export function DisasterMap({
       <div className="pointer-events-none absolute left-4 top-4 z-10 flex flex-wrap items-center gap-2">
         <span className="mock-badge border-amber-400/20 bg-amber-400/10 text-amber-200">Mock data</span>
         <span className="rounded-md border border-white/10 bg-[#07101b]/85 px-2 py-1 text-[10px] text-slate-400 shadow-lg backdrop-blur">
-          {useFallback ? "Demo Map · Mock Data" : "Mapbox Basemap · Mock Overlays"}
+          {useFallback ? "Demo Map · Mock Data" : "Mapbox Basemap · Mixed Data Layers"}
         </span>
       </div>
 
@@ -707,6 +904,8 @@ export function DisasterMap({
       <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-white/10 bg-[#07101b]/90 px-3 py-2 text-[10px] text-slate-400 shadow-xl backdrop-blur">
         <Legend color="bg-cyan-400" label="Recommended" />
         <Legend color="bg-amber-400" label="Hazard" />
+        {floodAnalysisResult && <Legend color="bg-sky-400" label="Flood / water" />}
+        {fireHotspotResult && <Legend color="bg-red-500" label="Relative fire intensity" />}
       </div>
     </section>
   )
@@ -725,8 +924,6 @@ function FallbackMap({
   layers,
   analysisComplete,
   recommendedRoute,
-  selectedHazardId,
-  onSelectHazard,
   startingPlace,
   destinationPlace,
   destinationType,
@@ -798,29 +995,6 @@ function FallbackMap({
             />
           </>
         )}
-        {layers.flooding && (
-          <path
-            d="M414 298 C458 258 545 280 570 342 C585 382 525 420 460 397 C405 378 378 335 414 298Z"
-            fill="#ef4444"
-            opacity={selectedHazardId === floodHazard.id ? 0.52 : 0.32}
-            stroke="#fb7185"
-            strokeWidth="2"
-          />
-        )}
-        {layers.bridgeDamage && (
-          <rect
-            x="588"
-            y="443"
-            width="70"
-            height="40"
-            rx="9"
-            fill="#f59e0b"
-            opacity={selectedHazardId === bridgeHazard.id ? 0.64 : 0.4}
-            stroke="#fcd34d"
-            strokeWidth="2"
-            transform="rotate(-18 623 463)"
-          />
-        )}
       </svg>
 
       {startingPlace && startPoint && (
@@ -864,30 +1038,6 @@ function FallbackMap({
         />
       )}
 
-      {layers.flooding && (
-        <button
-          type="button"
-          aria-label="Select flooded road hazard"
-          onClick={() => onSelectHazard(floodHazard)}
-          className={`hazard-map-button left-[52%] top-[47%] ${
-            selectedHazardId === floodHazard.id ? "ring-4 ring-red-400/25" : ""
-          }`}
-        >
-          <Waves className="size-4" />
-        </button>
-      )}
-      {layers.bridgeDamage && (
-        <button
-          type="button"
-          aria-label="Select bridge damage hazard"
-          onClick={() => onSelectHazard(bridgeHazard)}
-          className={`hazard-map-button left-[67%] top-[65%] bg-amber-500 text-slate-950 ${
-            selectedHazardId === bridgeHazard.id ? "ring-4 ring-amber-400/25" : ""
-          }`}
-        >
-          <AlertTriangle className="size-4" />
-        </button>
-      )}
 
       <div className="absolute right-4 top-4 rounded-md border border-white/10 bg-[#07101b]/85 px-2.5 py-2 text-right shadow-lg backdrop-blur">
         <p className="font-mono text-[10px] text-slate-300">37.226° N, 80.414° W</p>

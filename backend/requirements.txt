@@ -2,12 +2,14 @@ fastapi
 uvicorn
 python-multipart
 python-dotenv
-opencv-python
+pydantic
+starlette
 numpy
 pillow
 torch
 transformers==4.46.3
 networkx
 osmnx
-supabase
+requests
+shapely
 scikit-learn

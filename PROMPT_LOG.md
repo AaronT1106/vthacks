@@ -1431,3 +1431,194 @@ routing work or the SegFormer flood and NASA FIRMS active-fire work.
   `npm run build -- --webpack` passed, including compilation, TypeScript checking,
   static generation, and trace collection.
 - `git diff --check` and the repository conflict-marker scan passed.
+
+---
+
+## Backend Dependency and Environment Standardization — 2026-09-19
+
+### Request
+
+Make Python 3.12 backend setup predictable after teammate changes, separate runtime
+from test dependencies, and prevent missing OSMnx imports without changing application
+behavior.
+
+### Files Changed
+
+- `backend/requirements.txt`
+- `backend/requirements-dev.txt`
+- `backend/setup.sh`
+- `AGENTS.md`
+- `README.md`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Audited every backend runtime and test import.
+- Kept direct runtime dependencies for FastAPI, multipart forms, environment loading,
+  image/model inference, and road-network routing; added explicit Pydantic, Starlette,
+  and Shapely entries because application code imports them directly.
+- Removed OpenCV, Supabase, and scikit-learn because current backend code does not
+  import or use them.
+- Added development requirements for pytest and the Starlette TestClient's `httpx2`
+  dependency.
+- Added a Python 3.12 setup script that creates or synchronizes `backend/.venv`, uses
+  `--no-cache-dir`, installs no global packages, and verifies all runtime imports.
+- Added the same-change dependency rule for teammates and documented the shared setup
+  workflow.
+- Made the existing OSMnx 1.x bounding-box test explicitly select version 1.9.4; the
+  adjacent OSMnx 2.x test continues to verify the installed 2.x coordinate order.
+
+### Validation
+
+- `backend/setup.sh`: passed using Python 3.12.14, installed the missing OSMnx 2.1.1
+  runtime dependency and only its transitive pandas/geopandas requirements, then
+  printed `Backend imports OK`.
+- Explicit FastAPI, PyTorch, Transformers, OSMnx, NetworkX, and application import
+  check: passed.
+- `python -m pytest`: 64 passed. One Starlette/AnyIO deprecation warning remains.
+- `bash -n backend/setup.sh`, `git diff --check`, dependency scans, and the ignored
+  `backend/.env` check passed.
+
+---
+
+## Route-Page Flood and Fire Hazard Visualization — 2026-09-20
+
+### Request
+
+Carry successful SegFormer flood/water and NASA FIRMS results into Route and visualize
+them geographically without rerunning analysis or changing road-network routing.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-map.tsx`
+- `frontend/src/components/map-layer-controls.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+
+### Implemented
+
+- Lifted the existing flood and fire result types into dashboard session state and
+  reused them across Analysis-to-Route navigation without new API requests.
+- Clears both results on confirmed area changes and checks result bounds again before
+  displaying them, preventing stale analysis from appearing on another incident area.
+- Georeferences verified Sentinel-2 masks with a Mapbox image source using north-up
+  `[west,north]`, `[east,north]`, `[east,south]`, `[west,south]` corners and renders the
+  existing RGBA PNG through a restrained raster layer. Manual masks remain summary-only
+  because their geographic orientation is not verified.
+- Fetches temporary masks into managed browser object URLs and reports an expired or
+  unavailable overlay without crashing Route.
+- Renders positive-FRP FIRMS detections with a native Mapbox heatmap. Weight is
+  `log1p(FRP) / log1p(max positive FRP)`; recency does not affect visualization and
+  categorical confidence is preserved without conversion.
+- Orders the real flood raster and FIRMS heatmap below the existing route and markers,
+  adds conditional independent controls, and provides compact coverage/detection and
+  zero-result summaries.
+- Keeps the illustrative no-token fallback free of unsupported geographic overlays and
+  explains that accurate overlays require Mapbox.
+- Road requests, OSMnx/NetworkX/Dijkstra behavior, SegFormer inference, and FIRMS
+  retrieval were not changed. No Python, backend, or frontend dependencies were added.
+
+### Validation
+
+- Backend `.venv/bin/python -m pytest`: 64 passed with one existing Starlette/AnyIO
+  deprecation warning.
+- FastAPI application import: passed.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: reached the known Turbopack CSS-worker port-binding restriction.
+- `npm run build -- --webpack`: passed, including compilation, TypeScript, static page
+  generation, and build traces.
+- `git diff --check`: passed before this log entry.
+- Browser-only Mapbox alignment, layer coexistence, toggle, style-reload, and expired-mask
+  interaction checks remain pending because no in-app browser connection was available.
+
+---
+
+## Google Maps Route Handoff and Bridge-Damage Removal — 2026-09-20
+
+### Request
+
+Add a right-side Go button to completed route recommendations that opens the generated
+route in Google Maps, and remove bridge-access damage from the demo.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `backend/mock_data.py`
+- `frontend/src/components/disaster-analysis-step.tsx`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-map.tsx`
+- `frontend/src/components/map-layer-controls.tsx`
+- `frontend/src/components/route-recommendation-panel.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+
+### Implemented
+
+- Added a Go link beside the completed recommendation heading. It opens the official
+  Google Maps Directions URL in a new tab with driving/navigation mode.
+- Uses the generated road geometry's first and last coordinates plus three evenly
+  sampled interior coordinates as ordered waypoints. Three waypoints preserve mobile
+  browser compatibility while giving Google Maps the generated path to follow closely.
+- Removed potential bridge-access findings from manual and Sentinel demo analysis.
+- Removed the bridge hazard record, map polygon/marker, click handling, layer toggle,
+  and all bridge-damage recommendation and documentation wording.
+- Retained generic backend support for receiving a future `bridge-damage` hazard so
+  routing compatibility and its existing focused test remain intact; the current UI no
+  longer creates or displays one.
+- Added no dependencies and did not change OSMnx, NetworkX, flood, or FIRMS behavior.
+
+### Validation
+
+- Backend `.venv/bin/python -m pytest`: 64 passed with one existing Starlette/AnyIO
+  deprecation warning.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed.
+- User-visible frontend, backend recommendation, and README scans found no remaining
+  bridge-damage wording.
+- `git diff --check`: passed before this log entry.
+
+---
+
+## Flood/Water Pixel-Density Map Emphasis — 2026-09-20
+
+### Request
+
+Make the Route flood layer visually emphasize areas where the computer-vision mask
+identified a higher concentration of flood/water pixels.
+
+### Files Changed
+
+- `README.md`
+- `PROMPT_LOG.md`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-map.tsx`
+- Added `frontend/src/lib/flood-density.ts`
+
+### Implemented
+
+- Reads the alpha channel from the exact temporary SegFormer RGBA mask already fetched
+  for the Route map; no inference or satellite request is repeated.
+- Aggregates mask pixels into an aspect-ratio-aware grid with at most 32 cells per axis
+  and creates only coarse geographic cell polygons, never per-pixel GeoJSON.
+- Omits cells below eight percent classified flood/water pixels and stores each visible
+  cell's mathematically derived local density.
+- Adds a Mapbox fill layer above the binary flood raster and below fire, route, and
+  markers. Cyan becomes darker and more opaque as local classified-pixel density rises.
+- Uses the existing Flood / water toggle for both binary and density layers and clearly
+  states that darkness means pixel density, not depth, flow, severity, or danger.
+- If browser-side density extraction is unavailable, the exact aligned binary mask
+  remains usable. Routing and backend behavior are unchanged, with no new dependency.
+
+### Validation
+
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build -- --webpack`: passed.
+- `git diff --check`: passed before this log entry.
+- Browser-only density rendering remains pending because no in-app browser connection
+  is available in this session.

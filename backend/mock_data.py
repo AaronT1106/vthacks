@@ -25,9 +25,9 @@ ROLE_PROFILES = {
         "routeCoordinates": [(-80.4265, 37.234), (-80.412, 37.236), (-80.402, 37.229)],
         "travelTime": "12 min", "distance": "5.1 mi",
         "risk": "LOW", "confidence": 97, "priority": "Lowest hazard exposure to a safe shelter",
-        "hazardsAvoided": ["Route 460 flooding", "South Main bridge damage", "Hospital access congestion"],
+        "hazardsAvoided": ["Route 460 flooding", "Hospital access congestion"],
         "selectionReason": (
-            "The shelter route keeps civilians farthest from floodwater and damaged infrastructure, "
+            "The shelter route keeps civilians farthest from floodwater and congested infrastructure, "
             "accepting extra travel time for the largest safety buffer."
         ),
         "alternative": {
@@ -56,9 +56,9 @@ ROLE_PROFILES = {
         "routeCoordinates": [(-80.423, 37.232), (-80.4195, 37.228), (-80.417, 37.225)],
         "travelTime": "6 min", "distance": "2.9 mi",
         "risk": "MEDIUM", "confidence": 90, "priority": "Incident access for fire apparatus",
-        "hazardsAvoided": ["Blocked Route 460 lanes", "South Main bridge damage"],
+        "hazardsAvoided": ["Blocked Route 460 lanes", "Flooded incident approach"],
         "selectionReason": (
-            "The staging route approaches the incident on wider roads while bypassing blocked lanes and the bridge."
+            "The staging route approaches the incident on wider roads while bypassing blocked lanes and flooding."
         ),
         "alternative": {
             "routeName": "Downtown Incident Approach", "risk": "HIGH",
@@ -70,14 +70,14 @@ ROLE_PROFILES = {
         "destinationCoordinates": (-80.3985, 37.228),
         "routeCoordinates": [(-80.429, 37.238), (-80.414, 37.241), (-80.401, 37.236)],
         "travelTime": "16 min", "distance": "7.3 mi",
-        "risk": "LOW", "confidence": 88, "priority": "Heavy-vehicle road and bridge clearance",
-        "hazardsAvoided": ["South Main bridge damage", "Route 460 flooding", "Weight-restricted local roads"],
+        "risk": "LOW", "confidence": 88, "priority": "Heavy-vehicle road access",
+        "hazardsAvoided": ["Route 460 flooding", "Weight-restricted local roads"],
         "selectionReason": (
-            "The supply route uses roads suitable for loaded trucks and avoids the damaged bridge and flood zone."
+            "The supply route uses roads suitable for loaded trucks and avoids the flood zone and restricted roads."
         ),
         "alternative": {
             "routeName": "South Main Freight Route", "risk": "HIGH",
-            "rejectionReason": "Rejected because it requires the simulated damaged bridge and restricted roads.",
+            "rejectionReason": "Rejected because it requires weight-restricted roads near the flood zone.",
         },
     },
     "emergency-coordinator": {
@@ -86,10 +86,10 @@ ROLE_PROFILES = {
         "routeCoordinates": [(-80.427, 37.23), (-80.418, 37.235), (-80.409, 37.232)],
         "travelTime": "10 min", "distance": "5.4 mi",
         "risk": "MEDIUM", "confidence": 86, "priority": "Access to the highest-impact infrastructure",
-        "hazardsAvoided": ["Route 460 flood core", "South Main bridge closure"],
+        "hazardsAvoided": ["Route 460 flood core", "Hospital access congestion"],
         "selectionReason": (
             "The critical-access loop maintains links to the hospital, shelter, and incident edge while exposing "
-            "the coordinator to the two highest-impact simulated hazards on the map."
+            "the coordinator to the highest-impact simulated areas on the map."
         ),
         "alternative": {
             "routeName": "Single-Corridor Command Route", "risk": "HIGH",
