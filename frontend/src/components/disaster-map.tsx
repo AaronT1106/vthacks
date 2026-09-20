@@ -16,7 +16,6 @@ import {
   hazards,
   hospitals,
   incident,
-  routes,
   shelters,
   type Hazard,
   type DestinationType,
@@ -62,7 +61,6 @@ const SATELLITE_MAP_STYLE = "mapbox://styles/mapbox/satellite-streets-v12"
 
 const floodHazard = hazards.find((hazard) => hazard.type === "flooding")!
 const bridgeHazard = hazards.find((hazard) => hazard.type === "bridge-damage")!
-const unsafeRoute = routes.find((route) => route.kind === "unsafe")!
 
 function polygonCollection(hazard: Hazard): FeatureCollection<Polygon> {
   return {
@@ -147,20 +145,16 @@ function createPlacePopupContent(properties: Record<string, unknown>) {
   return container
 }
 
-function placeCoordinates(place: SelectedPlace | null): Coordinates | null {
-  return place ? [place.longitude, place.latitude] : null
-}
-
-function routeCollection(coordinates: Array<[number, number]>): FeatureCollection<LineString> {
+function routeCollection(geometry: LineString | null): FeatureCollection<LineString> {
   return {
     type: "FeatureCollection",
-    features: [
+    features: geometry ? [
       {
         type: "Feature",
         properties: {},
-        geometry: { type: "LineString", coordinates },
+        geometry,
       },
-    ],
+    ] : [],
   }
 }
 
@@ -180,9 +174,6 @@ function disasterAreaCollection(bounds: DisasterAreaBounds | null): FeatureColle
 }
 
 function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) {
-  const startCoordinates = placeCoordinates(currentState.startingPlace) ?? unsafeRoute.coordinates[0]
-  const destinationCoordinates = placeCoordinates(currentState.destinationPlace)
-    ?? unsafeRoute.coordinates[unsafeRoute.coordinates.length - 1]
   if (!map.getSource("confirmed-disaster-area")) {
     map.addSource("confirmed-disaster-area", {
       type: "geojson",
@@ -239,33 +230,10 @@ function addMockSourcesAndLayers(map: MapboxMap, currentState: CurrentMapState) 
     })
   }
 
-  if (!map.getSource("unsafe-route")) {
-    map.addSource("unsafe-route", {
-      type: "geojson",
-      data: routeCollection([
-        startCoordinates,
-        ...unsafeRoute.coordinates.slice(1, -1),
-        destinationCoordinates,
-      ]),
-    })
-    map.addLayer({
-      id: "unsafe-route-line",
-      type: "line",
-      source: "unsafe-route",
-      layout: { "line-cap": "round", "line-join": "round" },
-      paint: {
-        "line-color": "#fb7185",
-        "line-width": 4,
-        "line-opacity": 0.55,
-        "line-dasharray": [1.5, 1.5],
-      },
-    })
-  }
-
   if (!map.getSource("safe-route")) {
     map.addSource("safe-route", {
       type: "geojson",
-      data: routeCollection(currentState.recommendedRoute?.coordinates ?? []),
+      data: routeCollection(currentState.recommendedRoute?.geometry ?? null),
     })
     map.addLayer({
       id: "safe-route-line-shadow",
@@ -376,21 +344,8 @@ function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) 
     currentState.destinationType,
   ))
 
-  const startCoordinates = placeCoordinates(currentState.startingPlace) ?? unsafeRoute.coordinates[0]
-  const destinationCoordinates = placeCoordinates(currentState.destinationPlace)
-    ?? unsafeRoute.coordinates[unsafeRoute.coordinates.length - 1]
-
-  const unsafeRouteSource = map.getSource("unsafe-route") as GeoJSONSource | undefined
-  unsafeRouteSource?.setData(
-    routeCollection([
-      startCoordinates,
-      ...unsafeRoute.coordinates.slice(1, -1),
-      destinationCoordinates,
-    ]),
-  )
-
   const safeRouteSource = map.getSource("safe-route") as GeoJSONSource | undefined
-  safeRouteSource?.setData(routeCollection(currentState.recommendedRoute?.coordinates ?? []))
+  safeRouteSource?.setData(routeCollection(currentState.recommendedRoute?.geometry ?? null))
 
   if (map.getLayer("destination-place-point")) {
     map.setPaintProperty(
@@ -405,7 +360,6 @@ function synchronizeMockMapState(map: MapboxMap, currentState: CurrentMapState) 
   setLayerVisibility(map, "bridge-damage-fill", currentState.layers.bridgeDamage)
   setLayerVisibility(map, "hospital-points", currentState.layers.hospitals)
   setLayerVisibility(map, "shelter-points", currentState.layers.shelters)
-  setLayerVisibility(map, "unsafe-route-line", currentState.analysisComplete)
   setLayerVisibility(
     map,
     "safe-route-line-shadow",
@@ -752,17 +706,16 @@ export function DisasterMap({
 
       <div className="pointer-events-none absolute bottom-5 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-white/10 bg-[#07101b]/90 px-3 py-2 text-[10px] text-slate-400 shadow-xl backdrop-blur">
         <Legend color="bg-cyan-400" label="Recommended" />
-        <Legend color="bg-red-400" label="Unsafe" dashed />
         <Legend color="bg-amber-400" label="Hazard" />
       </div>
     </section>
   )
 }
 
-function Legend({ color, label, dashed = false }: { color: string; label: string; dashed?: boolean }) {
+function Legend({ color, label }: { color: string; label: string }) {
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap">
-      <span className={`h-0.5 w-4 ${color} ${dashed ? "opacity-60" : ""}`} />
+      <span className={`h-0.5 w-4 ${color}`} />
       {label}
     </span>
   )
@@ -779,7 +732,7 @@ function FallbackMap({
   destinationType,
   disasterAreaBounds,
 }: DisasterMapProps) {
-  const routePoints = recommendedRoute?.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
+  const routePoints = recommendedRoute?.geometry.coordinates.map(projectDemoPoint).map((point) => point.join(",")).join(" ")
   const startPoint = startingPlace
     ? projectDemoPoint([startingPlace.longitude, startingPlace.latitude])
     : null
@@ -825,18 +778,6 @@ function FallbackMap({
           ))}
         </g>
         {layers.risk && <ellipse cx="492" cy="360" rx="150" ry="105" fill="#f97316" opacity="0.1" />}
-        {analysisComplete && startPoint && endPoint && (
-          <polyline
-            points={[startPoint, projectDemoPoint(floodHazard.coordinates), endPoint]
-              .map((point) => point.join(","))
-              .join(" ")}
-            fill="none"
-            stroke="#fb7185"
-            strokeWidth="6"
-            strokeDasharray="12 12"
-            opacity="0.58"
-          />
-        )}
         {analysisComplete && layers.safeRoute && recommendedRoute && (
           <>
             <polyline

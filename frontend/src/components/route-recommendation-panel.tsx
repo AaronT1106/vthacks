@@ -42,7 +42,7 @@ export function RouteRecommendationPanel({
     return (
       <section className="panel-section flex min-h-48 flex-col items-center justify-center text-center" aria-live="polite">
         <div className="analysis-spinner mb-4" />
-        <h2 className="text-sm font-medium text-slate-200">Requesting mock route analysis</h2>
+        <h2 className="text-sm font-medium text-slate-200">Calculating road-network route</h2>
         <p className="mt-2 text-xs text-slate-500">Waiting for the local route-analysis service…</p>
       </section>
     )
@@ -82,7 +82,7 @@ export function RouteRecommendationPanel({
           <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{recommendation.routeName}</p>
           <p className="mt-1 text-[11px] text-slate-400">To {recommendation.recommendedDestination}</p>
         </div>
-        <span className="mock-badge">Mock data</span>
+        <span className="mock-badge">OSM roads · demo hazards</span>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-slate-800 bg-slate-800">
@@ -97,6 +97,12 @@ export function RouteRecommendationPanel({
         <p className="mt-3 text-xs leading-5 text-slate-300">{recommendation.explanation}</p>
         <p className="mt-3 text-[11px] font-medium text-cyan-300">Priority: {recommendation.priority}</p>
       </div>
+
+      {recommendation.warning && (
+        <div className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-3 text-xs leading-5 text-amber-200" role="status">
+          {recommendation.warning}
+        </div>
+      )}
 
       <div className="mt-5 border-t border-slate-800 pt-4">
         <p className="section-label">Hazards avoided</p>

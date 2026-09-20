@@ -1141,6 +1141,33 @@ Fix the zero-candidate After search for the known-good Blacksburg dates, compare
 
 ---
 
+## OSMnx Bounding-Box API Update — 2026-09-19
+
+### Request
+
+Remove the deprecated positional `graph_from_bbox` call without changing road-route behavior, while making coordinate ordering explicit for the installed OSMnx version and OSMnx v2.
+
+### Files Changed
+
+- `PROMPT_LOG.md`
+- `backend/road_routing.py`
+- `backend/test_main.py`
+
+### Implemented
+
+- Confirmed the installed OSMnx version is 1.9.4.
+- Standardized internal bounds as `(west, south, east, north)` and retained the same endpoint, selected-area, and padding envelope.
+- Calls `graph_from_bbox` through its `bbox=` keyword. OSMnx 1.x receives its documented `(north, south, east, west)` tuple; OSMnx 2 receives `(west, south, east, north)`.
+- Suppresses only OSMnx 1.9's unavoidable tuple-order transition warning. Dijkstra routing and hazard weighting are unchanged.
+- Added focused tests verifying the keyword call and tuple order for installed OSMnx 1.9 and OSMnx v2.
+
+### Validation
+
+- `python -m pytest backend/test_main.py`: 37 passed. The only warning is Starlette's unrelated pending `python_multipart` import deprecation.
+- `git diff --check`: passed; only Windows line-ending notices were reported.
+
+---
+
 ## Sentinel-2 Process API PNG Rendering — 2026-09-19
 
 ### Request
@@ -1167,3 +1194,75 @@ Render usable true-color Sentinel-2 images for selected Before and After scenes 
 - Live Copernicus request returned the known January 4 and September 14 scenes with `comparisonReady: true`.
 - The generated preview returned `HTTP 200`, `Content-Type: image/png`, and 529,764 bytes from backend memory.
 - `python -m pytest backend/test_main.py`: 29 passed.
+
+---
+
+## OSM Road-Network Routing — 2026-09-19
+
+### Request
+
+Replace straight and dotted route geometry with real road-following routes calculated by OSMnx and NetworkX, including role-specific hazard weighting and a clear unavailable state.
+
+### Files Changed
+
+- `PROMPT_LOG.md`
+- `backend/main.py`
+- `backend/road_routing.py`
+- `backend/test_main.py`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/disaster-map.tsx`
+- `frontend/src/components/route-recommendation-panel.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+- `frontend/src/lib/route-analysis.ts`
+
+### Implemented
+
+- Added cached OSMnx drive-graph retrieval around the endpoints and selected disaster area, nearest-node snapping, and NetworkX Dijkstra routing.
+- Uses edge travel time plus role-specific hazard and road-access costs. Confirmed or selected high-risk flood, bridge-damage, and blocked-road polygons can remove affected edges.
+- Extracts complete edge geometry and returns it as a GeoJSON `LineString` with calculated distance and travel time.
+- Preserved role-specific recommendation names, priorities, risk labels, explanations, alternatives, and evidence flow.
+- Sends searched Mapbox places to the same backend endpoint instead of constructing an illustrative frontend route.
+- Removed the static dotted route and all direct-line route fallbacks from Mapbox and the local fallback map.
+- Returns HTTP 503 with `Road-network route unavailable.` when graph retrieval, snapping, or Dijkstra fails; the frontend displays that message and draws no route.
+- Added deterministic graph tests proving the route contains more than two coordinates, is not a direct start-to-end line, and avoids a blocked high-risk flood edge.
+
+### Validation
+
+- `python -m pytest backend/test_main.py`: 32 passed.
+- FastAPI import check: passed.
+- `npm run lint`: passed.
+- `npm run build`: passed.
+
+---
+
+## Road-Network Availability Fix — 2026-09-19
+
+### Request
+
+Fix valid real-location routes that reported `Road-network route unavailable`, include route endpoints and disaster bounds in the OSM graph request, distinguish routing failure stages, and retain a real road route when hazard blocking disconnects the weighted graph.
+
+### Files Changed
+
+- `PROMPT_LOG.md`
+- `backend/main.py`
+- `backend/road_routing.py`
+- `backend/test_main.py`
+- `frontend/src/components/disaster-dashboard.tsx`
+- `frontend/src/components/route-recommendation-panel.tsx`
+- `frontend/src/data/mock-disaster-data.ts`
+
+### Implemented
+
+- Builds the padded graph envelope from the start, destination, and selected disaster-area bounds together.
+- Calculates and validates an ordinary travel-time Dijkstra path before applying role-specific access costs and finite hazard penalties.
+- Blocks an intersecting edge only for a confirmed high-severity hazard polygon; selected and unverified hazards remain finite routing penalties.
+- Logs graph download, start snapping, destination snapping, disconnected network, and confirmed-hazard disconnection failures separately.
+- Returns the ordinary street route with a visible `Hazard-aware route unavailable` warning when confirmed hazards disconnect the weighted graph. No direct-line geometry is generated.
+- Added coverage for endpoints outside the disaster bounds, a role-weighted hazard detour, and the confirmed-hazard fallback path.
+
+### Validation
+
+- `python -m pytest backend/test_main.py`: 35 passed.
+- `npm run lint`: passed.
+- `npm run build`: passed after rerunning outside the restricted sandbox because the initial TypeScript worker returned `spawn EPERM`.
+- `git diff --check`: passed; only Windows line-ending notices were reported.

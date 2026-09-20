@@ -8,3 +8,4 @@ pillow
 networkx
 osmnx
 supabase
+scikit-learn

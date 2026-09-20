@@ -8,17 +8,35 @@ from pathlib import Path
 import unittest
 from unittest.mock import MagicMock, patch
 
+import networkx as nx
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
 from main import analyze_damage, app
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
+from road_routing import RoadNetworkUnavailableError
 
 
 class RouteAnalysisTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
+        role_offsets = {role: index * 0.0001 for index, role in enumerate(ROLE_PROFILES, start=1)}
+        self.route_patcher = patch("main.calculate_road_route", side_effect=lambda start, destination, role, _area, _hazards: {
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    list(start),
+                    [(start[0] + destination[0]) / 2 + role_offsets[role], (start[1] + destination[1]) / 2],
+                    list(destination),
+                ],
+            },
+            "distanceMiles": 3.25,
+            "travelMinutes": 9,
+            "warning": None,
+        })
+        self.route_patcher.start()
+        self.addCleanup(self.route_patcher.stop)
         self.request = {
             "startingPoint": "blacksburg-fire-station",
             "destination": "lewisgale-hospital",
@@ -34,31 +52,30 @@ class RouteAnalysisTests(unittest.TestCase):
                         response = self.client.post("/api/analyze-route", json=request)
                         self.assertEqual(response.status_code, 200)
                         body = response.json()
-                        self.assertEqual(body["dataSource"], "mock")
+                        self.assertEqual(body["dataSource"], "road-network")
                         for key, value in request.items():
                             self.assertEqual(body[key], value)
                         recommendation = body["recommendation"]
                         self.assertEqual(recommendation["role"], role)
                         self.assertEqual(
                             recommendation["recommendedDestination"],
-                            ROLE_PROFILES[role]["recommendedDestination"],
+                            DESTINATIONS[destination]["name"],
                         )
                         self.assertEqual(recommendation["risk"], ROLE_PROFILES[role]["risk"])
                         self.assertEqual(recommendation["routeName"], ROLE_PROFILES[role]["routeName"])
-                        self.assertEqual(recommendation["travelTime"], ROLE_PROFILES[role]["travelTime"])
-                        self.assertEqual(recommendation["distance"], ROLE_PROFILES[role]["distance"])
+                        self.assertEqual(recommendation["travelTime"], "9 min")
+                        self.assertEqual(recommendation["distance"], "3.2 mi")
                         self.assertEqual(recommendation["confidence"], ROLE_PROFILES[role]["confidence"])
                         self.assertEqual(recommendation["hazardsAvoided"], ROLE_PROFILES[role]["hazardsAvoided"])
                         self.assertIsInstance(recommendation["hazardsAvoided"], list)
                         self.assertNotIn("hazards_avoided", recommendation)
                         self.assertEqual(recommendation["alternative"], ROLE_PROFILES[role]["alternative"])
                         self.assertIn(DESTINATIONS[destination]["name"], recommendation["explanation"])
-                        self.assertIn(ROLE_PROFILES[role]["recommendedDestination"], recommendation["explanation"])
-                        self.assertIn("preset demo values", recommendation["explanation"])
-                        self.assertEqual(body["route"]["coordinates"][0], list(STARTING_POINTS[start]["coordinates"]))
+                        self.assertIn("Dijkstra routing follows OpenStreetMap", recommendation["explanation"])
+                        self.assertEqual(body["route"]["geometry"]["coordinates"][0], list(STARTING_POINTS[start]["coordinates"]))
                         self.assertEqual(
-                            body["route"]["coordinates"][-1],
-                            list(ROLE_PROFILES[role]["destinationCoordinates"]),
+                            body["route"]["geometry"]["coordinates"][-1],
+                            list(DESTINATIONS[destination]["coordinates"]),
                         )
 
     def test_roles_produce_distinct_recommendation_profiles(self):
@@ -74,9 +91,6 @@ class RouteAnalysisTests(unittest.TestCase):
         recommendations = [result["recommendation"] for result in results.values()]
         distinct_fields = [
             "routeName",
-            "recommendedDestination",
-            "travelTime",
-            "distance",
             "confidence",
             "hazardsAvoided",
             "explanation",
@@ -92,12 +106,12 @@ class RouteAnalysisTests(unittest.TestCase):
             for recommendation in recommendations
         }
         self.assertEqual(len(risk_profiles), len(ROLE_PROFILES))
-        geometries = {str(result["route"]["coordinates"]) for result in results.values()}
+        geometries = {str(result["route"]["geometry"]["coordinates"]) for result in results.values()}
         self.assertEqual(len(geometries), len(ROLE_PROFILES))
 
-        self.assertEqual(results["civilian"]["recommendation"]["recommendedDestination"], "Blacksburg Community Shelter")
+        self.assertEqual(results["civilian"]["recommendation"]["recommendedDestination"], "LewisGale Hospital Montgomery")
         self.assertEqual(results["ambulance"]["recommendation"]["recommendedDestination"], "LewisGale Hospital Montgomery")
-        self.assertEqual(results["firefighter"]["recommendation"]["recommendedDestination"], "Route 460 Incident Staging")
+        self.assertEqual(results["firefighter"]["recommendation"]["recommendedDestination"], "LewisGale Hospital Montgomery")
         self.assertEqual(results["supply-vehicle"]["recommendation"]["routeName"], "Heavy Vehicle Supply Route")
         self.assertEqual(results["emergency-coordinator"]["recommendation"]["risk"], "MEDIUM")
 
@@ -135,7 +149,8 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["selectedArea"], request["selectedArea"])
-        self.assertEqual(body["detectedHazards"], request["detectedHazards"])
+        self.assertEqual(body["detectedHazards"][0]["id"], request["detectedHazards"][0]["id"])
+        self.assertIsNone(body["detectedHazards"][0]["polygon"])
         self.assertIn("Potential Flooded Road Segment", body["recommendation"]["hazardsAvoided"])
         self.assertIn("demo hazards detected in the selected area", body["recommendation"]["explanation"])
         self.assertIn("-80.4500, 37.2000 to -80.4000, 37.2500", body["recommendation"]["explanation"])
@@ -158,6 +173,37 @@ class RouteAnalysisTests(unittest.TestCase):
         response = self.client.post("/api/analyze-route", content="{", headers={"Content-Type": "application/json"})
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.client.get("/api/analyze-route").status_code, 405)
+
+    def test_coordinate_places_use_backend_road_routing(self):
+        response = self.client.post("/api/analyze-route", json={
+            "startingPoint": {"name": "Selected start", "longitude": -80.42, "latitude": 37.23},
+            "destination": {"name": "Selected hospital", "longitude": -80.40, "latitude": 37.21},
+            "responderType": "ambulance",
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["recommendation"]["recommendedDestination"], "Selected hospital")
+        self.assertGreater(len(body["route"]["geometry"]["coordinates"]), 2)
+
+    def test_road_network_failure_returns_clear_503(self):
+        with patch("main.calculate_road_route", side_effect=RoadNetworkUnavailableError("offline")):
+            response = self.client.post("/api/analyze-route", json=self.request)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "Road-network route unavailable.")
+
+    def test_hazard_aware_fallback_warning_is_returned(self):
+        with patch("main.calculate_road_route", return_value={
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [[-80.42, 37.23], [-80.41, 37.22], [-80.40, 37.21]],
+            },
+            "distanceMiles": 2.0,
+            "travelMinutes": 7,
+            "warning": "Hazard-aware route unavailable; showing the normal road-network route for operator review.",
+        }):
+            response = self.client.post("/api/analyze-route", json=self.request)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Hazard-aware route unavailable", response.json()["recommendation"]["warning"])
 
     def test_mock_satellite_imagery_returns_manual_fallback_for_exact_bbox(self):
         request = {
@@ -436,6 +482,133 @@ class RouteAnalysisTests(unittest.TestCase):
         for request in invalid_requests:
             with self.subTest(request=request):
                 self.assertEqual(self.client.post("/api/satellite-imagery", json=request).status_code, 422)
+
+
+class RoadRoutingTests(unittest.TestCase):
+    def test_query_bounds_include_route_endpoints_selected_area_and_padding(self):
+        from road_routing import _query_bounds
+
+        west, south, east, north = _query_bounds(
+            (-81.0, 38.0),
+            (-79.0, 36.0),
+            {"west": -80.5, "south": 36.5, "east": -80.0, "north": 37.5},
+        )
+
+        self.assertGreater(north, 38.0)
+        self.assertLess(south, 36.0)
+        self.assertGreater(east, -79.0)
+        self.assertLess(west, -81.0)
+
+    @patch("road_routing.ox.add_edge_travel_times")
+    @patch("road_routing.ox.add_edge_speeds")
+    @patch("road_routing.ox.graph_from_bbox")
+    def test_download_uses_installed_osmnx_bbox_keyword_order(
+        self, graph_from_bbox, add_edge_speeds, add_edge_travel_times
+    ):
+        from road_routing import _download_drive_graph
+
+        graph = nx.MultiDiGraph()
+        graph_from_bbox.return_value = graph
+        add_edge_speeds.return_value = graph
+        add_edge_travel_times.return_value = graph
+        _download_drive_graph.cache_clear()
+
+        _download_drive_graph(-81.0, 36.0, -79.0, 38.0)
+
+        graph_from_bbox.assert_called_once_with(
+            bbox=(38.0, 36.0, -79.0, -81.0),
+            network_type="drive",
+            simplify=True,
+        )
+
+    @patch("road_routing.ox.__version__", "2.0.0")
+    @patch("road_routing.ox.add_edge_travel_times")
+    @patch("road_routing.ox.add_edge_speeds")
+    @patch("road_routing.ox.graph_from_bbox")
+    def test_download_uses_west_south_east_north_for_osmnx_v2(
+        self, graph_from_bbox, add_edge_speeds, add_edge_travel_times
+    ):
+        from road_routing import _download_drive_graph
+
+        graph = nx.MultiDiGraph()
+        graph_from_bbox.return_value = graph
+        add_edge_speeds.return_value = graph
+        add_edge_travel_times.return_value = graph
+        _download_drive_graph.cache_clear()
+
+        _download_drive_graph(-81.0, 36.0, -79.0, 38.0)
+
+        graph_from_bbox.assert_called_once_with(
+            bbox=(-81.0, 36.0, -79.0, 38.0),
+            network_type="drive",
+            simplify=True,
+        )
+
+    @patch("road_routing.ox.distance.nearest_nodes", side_effect=[1, 3])
+    @patch("road_routing._download_drive_graph")
+    def test_dijkstra_returns_street_geometry_and_avoids_high_risk_polygon(self, download_graph, _nearest):
+        from road_routing import calculate_road_route
+
+        graph = nx.MultiDiGraph()
+        graph.add_node(1, x=-80.42, y=37.23)
+        graph.add_node(2, x=-80.41, y=37.225)
+        graph.add_node(3, x=-80.40, y=37.21)
+        graph.add_node(4, x=-80.41, y=37.22)
+        graph.add_edge(1, 4, length=500, travel_time=40, highway="primary")
+        graph.add_edge(4, 3, length=500, travel_time=40, highway="primary")
+        graph.add_edge(1, 2, length=700, travel_time=60, highway="secondary")
+        graph.add_edge(2, 3, length=700, travel_time=60, highway="secondary")
+        download_graph.return_value = graph
+        hazard = {
+            "type": "flooding",
+            "severity": "HIGH",
+            "selected": True,
+            "polygon": [
+                [-80.411, 37.219], [-80.409, 37.219], [-80.409, 37.221],
+                [-80.411, 37.221], [-80.411, 37.219],
+            ],
+        }
+
+        result = calculate_road_route(
+            (-80.42, 37.23), (-80.40, 37.21), "civilian", None, [hazard]
+        )
+
+        coordinates = result["geometry"]["coordinates"]
+        self.assertEqual(result["geometry"]["type"], "LineString")
+        self.assertGreater(len(coordinates), 2)
+        self.assertIn([-80.41, 37.225], coordinates)
+        self.assertNotEqual(coordinates, [[-80.42, 37.23], [-80.40, 37.21]])
+
+    @patch("road_routing.ox.distance.nearest_nodes", side_effect=[1, 3])
+    @patch("road_routing._download_drive_graph")
+    def test_confirmed_hazard_block_falls_back_to_normal_road_route(self, download_graph, _nearest):
+        from road_routing import calculate_road_route
+
+        graph = nx.MultiDiGraph()
+        graph.add_node(1, x=-80.42, y=37.23)
+        graph.add_node(2, x=-80.41, y=37.22)
+        graph.add_node(3, x=-80.40, y=37.21)
+        graph.add_edge(1, 2, length=500, travel_time=40, highway="primary")
+        graph.add_edge(2, 3, length=500, travel_time=40, highway="primary")
+        download_graph.return_value = graph
+        hazard = {
+            "type": "bridge-damage",
+            "severity": "HIGH",
+            "verification": "Confirmed by operator",
+            "polygon": [
+                [-80.411, 37.219], [-80.409, 37.219], [-80.409, 37.221],
+                [-80.411, 37.221], [-80.411, 37.219],
+            ],
+        }
+
+        with self.assertLogs("road_routing", level="WARNING") as logs:
+            result = calculate_road_route(
+                (-80.42, 37.23), (-80.40, 37.21), "ambulance", None, [hazard]
+            )
+
+        self.assertGreater(len(result["geometry"]["coordinates"]), 2)
+        self.assertIn("Hazard-aware route unavailable", result["warning"])
+        self.assertTrue(any("all paths blocked by confirmed hazards" in line for line in logs.output))
 
 
 class DamageAnalysisTests(unittest.TestCase):

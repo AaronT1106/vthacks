@@ -1,4 +1,4 @@
-"""Minimal mock route-analysis API. No live routing or AI inference is performed."""
+"""DisasterLens route, imagery, and analysis API."""
 
 import logging
 from datetime import date, datetime, timedelta
@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
+from road_routing import RoadNetworkUnavailableError, calculate_road_route
 from satellite_imagery import (
     SENTINEL_FIRST_DATE,
     ProviderUnavailableError,
@@ -50,13 +51,24 @@ class RouteDetectedHazard(BaseModel):
     severity: Literal["LOW", "MEDIUM", "HIGH"]
     confidence: int = Field(ge=0, le=100)
     affectedInfrastructure: list[str]
+    polygon: list[Coordinates] | None = None
+    verification: str | None = None
+    selected: bool = False
+
+
+class RoutePlace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    longitude: float = Field(ge=-180, le=180)
+    latitude: float = Field(ge=-90, le=90)
 
 
 class RouteAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    startingPoint: StartingPoint
-    destination: Destination
+    startingPoint: StartingPoint | RoutePlace
+    destination: Destination | RoutePlace
     responderType: ResponderMode
     selectedArea: RouteSelectedArea | None = None
     detectedHazards: list[RouteDetectedHazard] = Field(default_factory=list, max_length=20)
@@ -80,17 +92,23 @@ class RouteRecommendation(BaseModel):
     explanation: str
     hazardsAvoided: list[str] = Field(default_factory=list)
     alternative: AlternativeRoute
+    warning: str | None = None
 
 
 class Route(BaseModel):
     id: str
     name: str
     kind: Literal["safe"]
-    coordinates: list[Coordinates]
+
+    class Geometry(BaseModel):
+        type: Literal["LineString"] = "LineString"
+        coordinates: list[Coordinates] = Field(min_length=3)
+
+    geometry: Geometry
 
 
 class RouteAnalysisResponse(RouteAnalysisRequest):
-    dataSource: Literal["mock"] = "mock"
+    dataSource: Literal["road-network"] = "road-network"
     recommendation: RouteRecommendation
     route: Route
 
@@ -239,7 +257,7 @@ class AnalysisRasterMetadata(BaseModel):
 AnalyzeDamageReceiptResponse.model_rebuild()
 
 
-app = FastAPI(title="DisasterLens Mock Route API", version="0.1.0")
+app = FastAPI(title="DisasterLens API", version="0.1.0")
 
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
@@ -332,9 +350,15 @@ def satellite_imagery_preview(preview_id: str) -> Response:
 
 @app.post("/api/analyze-route", response_model=RouteAnalysisResponse)
 def analyze_route(request: RouteAnalysisRequest) -> RouteAnalysisResponse:
-    """Return preset demo metrics and illustrative geometry for known location IDs."""
-    start = STARTING_POINTS[request.startingPoint]
-    requested_destination = DESTINATIONS[request.destination]
+    """Calculate a role-weighted route over the OpenStreetMap drive network."""
+    start = STARTING_POINTS[request.startingPoint] if isinstance(request.startingPoint, str) else {
+        "name": request.startingPoint.name,
+        "coordinates": (request.startingPoint.longitude, request.startingPoint.latitude),
+    }
+    requested_destination = DESTINATIONS[request.destination] if isinstance(request.destination, str) else {
+        "name": request.destination.name,
+        "coordinates": (request.destination.longitude, request.destination.latitude),
+    }
     profile = ROLE_PROFILES[request.responderType]
     route_name = profile["routeName"]
     selected_hazard_names = [hazard.name for hazard in request.detectedHazards]
@@ -348,36 +372,45 @@ def analyze_route(request: RouteAnalysisRequest) -> RouteAnalysisResponse:
             f"{', '.join(selected_hazard_names)}."
         )
 
+    hazard_payloads = [hazard.model_dump() for hazard in request.detectedHazards]
+    try:
+        road_route = calculate_road_route(
+            start["coordinates"],
+            requested_destination["coordinates"],
+            request.responderType,
+            request.selectedArea.model_dump() if request.selectedArea else None,
+            hazard_payloads,
+        )
+    except RoadNetworkUnavailableError as error:
+        logger.error("Road-network route unavailable: %s", error)
+        raise HTTPException(status_code=503, detail="Road-network route unavailable.") from error
+
     recommendation = RouteRecommendation(
         role=request.responderType,
         routeName=route_name,
-        recommendedDestination=profile["recommendedDestination"],
-        travelTime=profile["travelTime"],
-        distance=profile["distance"],
+        recommendedDestination=requested_destination["name"],
+        travelTime=f"{road_route['travelMinutes']} min",
+        distance=f"{road_route['distanceMiles']:.1f} mi",
         risk=profile["risk"],
         confidence=profile["confidence"],
         priority=profile["priority"],
         hazardsAvoided=hazards_avoided,
         alternative=AlternativeRoute(**profile["alternative"]),
         explanation=(
-            f"{profile['selectionReason']}{selected_area_explanation} This is a mock recommendation from {start['name']} "
-            f"to {profile['recommendedDestination']}. The requested destination, "
-            f"{requested_destination['name']}, remains request context; metrics are preset demo values "
-            "and require human verification."
+            f"{profile['selectionReason']}{selected_area_explanation} Dijkstra routing follows OpenStreetMap drive "
+            f"edges from {start['name']} to {requested_destination['name']} using role-specific access and hazard "
+            "weights. Road and hazard conditions require human verification."
         ),
+        warning=road_route.get("warning"),
     )
     return RouteAnalysisResponse(
         **request.model_dump(),
         recommendation=recommendation,
         route=Route(
-            id=f"mock-{request.startingPoint}-{request.responderType}",
+            id=f"road-network-{request.responderType}",
             name=route_name,
             kind="safe",
-            coordinates=[
-                start["coordinates"],
-                *profile["routeCoordinates"],
-                profile["destinationCoordinates"],
-            ],
+            geometry=Route.Geometry(**road_route["geometry"]),
         ),
     )
 

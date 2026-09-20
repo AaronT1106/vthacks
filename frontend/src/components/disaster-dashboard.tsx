@@ -110,7 +110,7 @@ export function DisasterDashboard() {
     ? damageAnalysisResult?.hazards.find((hazard) => hazard.id === evidenceSelection.id) ?? null
     : hazardRecords.find((hazard) => hazard.id === evidenceSelection?.id) ?? null
 
-  const recommendedEndpoint = analysisResult?.route.coordinates.at(-1)
+  const recommendedEndpoint = analysisResult?.route.geometry.coordinates.at(-1)
   const displayedDestinationPlace: SelectedPlace | null = analysisResult && recommendedEndpoint
     ? {
         name: analysisResult.recommendation.recommendedDestination,
@@ -252,24 +252,36 @@ export function DisasterDashboard() {
     setAnalysisResult(null)
     setAnalysisError("")
     setAnalysisStatus("analyzing")
-    const timeout = window.setTimeout(() => controller.abort(), 15000)
+    const timeout = window.setTimeout(() => controller.abort(), 60000)
+    const routingHazards: DemoDamageHazard[] = hazardRecords
+      .filter((hazard) => !hazard.verification.toLowerCase().includes("false positive"))
+      .map((hazard) => ({
+        id: hazard.id,
+        name: hazard.name,
+        type: hazard.type,
+        severity: hazard.severity,
+        confidence: hazard.confidence,
+        affectedInfrastructure: hazard.affected,
+        polygon: hazard.polygon,
+        verification: hazard.verification,
+        selected: hazard.id === selectedHazardId,
+      }))
+    if (damageAnalysisResult) routingHazards.push(...damageAnalysisResult.hazards)
     try {
       const result = usesPresetRoute
         ? await analyzeRoute({
             startingPoint: startingPlace.presetId!,
             destination: destinationPlace.presetId!,
             responderType: responderMode,
-            ...(damageAnalysisResult ? {
-              selectedArea: damageAnalysisResult.bounds,
-              detectedHazards: damageAnalysisResult.hazards,
-            } : {}),
+            selectedArea: damageAnalysisResult?.bounds ?? disasterAreaBounds ?? undefined,
+            detectedHazards: routingHazards,
           }, controller.signal)
         : await analyzeCoordinateRoute({
             startingPlace,
             destinationPlace,
             responderType: responderMode,
-            selectedArea: damageAnalysisResult?.bounds,
-            detectedHazards: damageAnalysisResult?.hazards,
+            selectedArea: damageAnalysisResult?.bounds ?? disasterAreaBounds ?? undefined,
+            detectedHazards: routingHazards,
             signal: controller.signal,
           })
       if (activeRequest.current !== controller) return
@@ -280,14 +292,14 @@ export function DisasterDashboard() {
       const routeEvent: ChangeEvent = {
         id: `analysis-${now.getTime()}`,
         time: formatFeedTime(now),
-        title: `${result.recommendation.routeName} recommended for ${selectedRole} (mock demo)`,
+        title: `${result.recommendation.routeName} recommended for ${selectedRole}`,
         detail: `Requested destination: ${destinationPlace.name}. Recommended destination: ${result.recommendation.recommendedDestination}; ${result.recommendation.travelTime}, ${result.recommendation.distance}, ${result.recommendation.risk.toLowerCase()} risk.`,
         tone: "safe",
       }
       const alternativeEvent: ChangeEvent = {
         id: `alternative-${now.getTime()}`,
         time: formatFeedTime(alternativeTime),
-        title: `${result.recommendation.alternative.routeName} rejected (mock demo)`,
+        title: `${result.recommendation.alternative.routeName} rejected (demo hazards)`,
         detail: `${selectedRole} route to ${result.recommendation.recommendedDestination}: ${result.recommendation.alternative.rejectionReason}`,
         tone: "warning",
       }
@@ -536,7 +548,7 @@ export function DisasterDashboard() {
                   )}
                   {mapboxToken && canAnalyzeRoute && !usesPresetRoute && (
                     <p className="text-[10px] leading-4 text-cyan-300/70">
-                      Real-place analysis uses an illustrative frontend mock route.
+                      Real-place analysis uses the backend road network and may take several seconds.
                     </p>
                   )}
                 </div>

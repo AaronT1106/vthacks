@@ -94,6 +94,9 @@ export interface DemoDamageHazard {
   severity: Severity
   confidence: number
   affectedInfrastructure: string[]
+  polygon?: Coordinates[]
+  verification?: string
+  selected?: boolean
 }
 
 export interface DemoDamageAnalysisResult {
@@ -120,7 +123,10 @@ export interface Route {
   id: string
   name: string
   kind: "unsafe" | "safe"
-  coordinates: Coordinates[]
+  geometry: {
+    type: "LineString"
+    coordinates: Coordinates[]
+  }
 }
 
 export interface RouteRecommendation {
@@ -139,18 +145,19 @@ export interface RouteRecommendation {
     risk: Severity
     rejectionReason: string
   }
+  warning?: string | null
 }
 
 export interface RouteAnalysisRequest {
-  startingPoint: string
-  destination: string
+  startingPoint: string | Pick<SelectedPlace, "name" | "longitude" | "latitude">
+  destination: string | Pick<SelectedPlace, "name" | "longitude" | "latitude">
   responderType: ResponderMode
   selectedArea?: DisasterAreaBounds
   detectedHazards?: DemoDamageHazard[]
 }
 
 export interface RouteAnalysisResponse extends RouteAnalysisRequest {
-  dataSource: "mock"
+  dataSource: "road-network"
   recommendation: RouteRecommendation
   route: Route
 }
@@ -294,32 +301,6 @@ export const hazards: Hazard[] = [
       [-80.405, 37.216],
       [-80.4074, 37.2158],
       [-80.4078, 37.218],
-    ],
-  },
-]
-
-export const routes: Route[] = [
-  {
-    id: "route-a",
-    name: "Original Route A",
-    kind: "unsafe",
-    coordinates: [
-      [-80.4202, 37.2306],
-      [-80.4174, 37.2261],
-      [-80.4138, 37.2202],
-      [-80.4093, 37.2107],
-    ],
-  },
-  {
-    id: "route-b",
-    name: "Recommended Route B",
-    kind: "safe",
-    coordinates: [
-      [-80.4202, 37.2306],
-      [-80.426, 37.226],
-      [-80.425, 37.2165],
-      [-80.417, 37.2118],
-      [-80.4093, 37.2107],
     ],
   },
 ]
