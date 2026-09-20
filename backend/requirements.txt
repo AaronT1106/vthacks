@@ -5,6 +5,8 @@ python-dotenv
 opencv-python
 numpy
 pillow
+torch
+transformers==4.46.3
 networkx
 osmnx
 supabase

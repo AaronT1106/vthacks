@@ -1,13 +1,22 @@
 """DisasterLens route, imagery, and analysis API."""
 
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.concurrency import run_in_threadpool
 
+from flood_segmentation import (
+    FloodAnalysisError,
+    cache_flood_mask,
+    get_cached_flood_mask,
+    run_flood_segmentation,
+)
+from fire_hotspots import FireHotspotError, fetch_fire_hotspots
 from mock_data import DESTINATIONS, ROLE_PROFILES, STARTING_POINTS
 from road_routing import RoadNetworkUnavailableError, calculate_road_route
 from satellite_imagery import (
@@ -257,6 +266,119 @@ class AnalysisRasterMetadata(BaseModel):
 AnalyzeDamageReceiptResponse.model_rebuild()
 
 
+class FloodModelMetadata(BaseModel):
+    architecture: Literal["SegFormer-B0"]
+    identifier: str
+    revision: str
+    device: Literal["cuda", "mps", "cpu"]
+
+
+class FloodImageMetadata(BaseModel):
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+    format: str
+    mode: str
+    byteSize: int = Field(gt=0)
+
+
+class FloodProcessingMetadata(BaseModel):
+    inputWidth: int = Field(gt=0)
+    inputHeight: int = Field(gt=0)
+    rawOutputShape: list[int]
+
+
+class FloodStatistics(BaseModel):
+    floodPixelCount: int = Field(ge=0)
+    totalPixelCount: int = Field(ge=0)
+    invalidPixelCount: int = Field(ge=0)
+    floodCoveragePercent: float = Field(ge=0, le=100)
+
+
+class FloodMaskMetadata(BaseModel):
+    url: str
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class FloodAcquisitionMetadata(BaseModel):
+    source: Literal["manual", "satellite"]
+    bbox: tuple[float, float, float, float]
+    provider: str | None = None
+    sceneId: str | None = None
+    capturedAt: datetime | None = None
+    cloudCoverage: float | None = Field(default=None, ge=0, le=100)
+    dataMode: Literal["live"] | None = None
+    filename: str | None = None
+    contentType: str | None = None
+
+
+class FloodAnalysisResponse(BaseModel):
+    status: Literal["success"] = "success"
+    analysisType: Literal["flood_segmentation"] = "flood_segmentation"
+    model: FloodModelMetadata
+    image: FloodImageMetadata
+    processing: FloodProcessingMetadata
+    flood: FloodStatistics
+    mask: FloodMaskMetadata
+    acquisition: FloodAcquisitionMetadata
+
+
+class FireHotspotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    west: float = Field(ge=-180, le=180)
+    south: float = Field(ge=-90, le=90)
+    east: float = Field(ge=-180, le=180)
+    north: float = Field(ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def validate_order(self):
+        if self.east <= self.west or self.north <= self.south:
+            raise ValueError("bounds must contain valid ordered coordinates")
+        return self
+
+
+class FireHotspotSource(BaseModel):
+    provider: Literal["NASA FIRMS"]
+    sensor: Literal["VIIRS"]
+    product: Literal["VIIRS_NOAA21_NRT"]
+    dayRange: int = Field(ge=1, le=5)
+
+
+class FireHotspotBounds(BaseModel):
+    west: float
+    south: float
+    east: float
+    north: float
+
+
+class FireHotspotDetection(BaseModel):
+    latitude: float
+    longitude: float
+    acquisitionDate: str
+    acquisitionTime: str
+    acquiredAt: str | None
+    satellite: str | None
+    instrument: str | None
+    confidence: str | None
+    frp: float | None
+    brightness: float | None
+    scan: float | None
+    track: float | None
+    version: str | None
+    brightTi5: float | None
+    dayNight: str | None
+
+
+class FireHotspotResponse(BaseModel):
+    status: Literal["success"] = "success"
+    analysisType: Literal["active_fire_hotspots"] = "active_fire_hotspots"
+    source: FireHotspotSource
+    bounds: FireHotspotBounds
+    detectionCount: int = Field(ge=0)
+    detections: list[FireHotspotDetection]
+
+
 app = FastAPI(title="DisasterLens API", version="0.1.0")
 
 ALLOWED_IMAGE_CONTENT_TYPES = {"image/png", "image/jpeg", "image/webp"}
@@ -331,7 +453,7 @@ def satellite_imagery_preview(preview_id: str) -> Response:
     if not cached:
         logger.warning("Sentinel-2 preview request preview_id=%s status=404", preview_id)
         raise HTTPException(status_code=404, detail="Sentinel-2 preview expired or is unavailable.")
-    image, content_type, _, scene_id, _ = cached
+    image, content_type, _, scene_id, _, _ = cached
     logger.info(
         "Sentinel-2 preview request scene_id=%s preview_id=%s status=200 content_type=%s",
         scene_id,
@@ -345,6 +467,107 @@ def satellite_imagery_preview(preview_id: str) -> Response:
             "Cache-Control": "private, max-age=300, stale-if-error=60",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@app.post("/api/analyze-flood", response_model=FloodAnalysisResponse)
+async def analyze_flood(
+    source: Literal["manual", "satellite"] = Form(...),
+    west: float = Form(...),
+    south: float = Form(...),
+    east: float = Form(...),
+    north: float = Form(...),
+    after_image: UploadFile | None = File(default=None),
+    after_preview_id: str | None = Form(default=None),
+) -> FloodAnalysisResponse:
+    """Segment water-class pixels in the exact selected After image."""
+    try:
+        if not (east > west and north > south):
+            raise HTTPException(status_code=400, detail="Invalid disaster-area bounds.")
+        bounds = (west, south, east, north)
+
+        if source == "manual":
+            if after_image is None:
+                raise HTTPException(status_code=400, detail="Manual After image is required.")
+            content_type = after_image.content_type or ""
+            image_bytes = await after_image.read()
+            acquisition = FloodAcquisitionMetadata(
+                source="manual",
+                bbox=bounds,
+                filename=after_image.filename or "unnamed-after-image",
+                contentType=content_type,
+            )
+        else:
+            if not after_preview_id or not re.fullmatch(r"[a-f0-9]{32}", after_preview_id):
+                raise HTTPException(status_code=400, detail="Valid Sentinel-2 After preview is required.")
+            cached = get_cached_preview(after_preview_id)
+            if not cached:
+                raise HTTPException(status_code=404, detail="Sentinel-2 After preview expired or is unavailable.")
+            image_bytes, content_type, cached_bounds, scene_id, captured_at, cloud_coverage = cached
+            if any(abs(expected - actual) > 0.0000001 for expected, actual in zip(bounds, cached_bounds)):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Sentinel-2 After preview does not match the confirmed disaster area.",
+                )
+            acquisition = FloodAcquisitionMetadata(
+                source="satellite",
+                bbox=cached_bounds,
+                provider="Copernicus Sentinel-2",
+                sceneId=scene_id,
+                capturedAt=captured_at,
+                cloudCoverage=cloud_coverage,
+                dataMode="live",
+            )
+
+        try:
+            result = await run_in_threadpool(run_flood_segmentation, image_bytes, content_type)
+        except FloodAnalysisError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        mask_url = cache_flood_mask(result.pop("maskBytes"))
+        return FloodAnalysisResponse(
+            **result,
+            mask=FloodMaskMetadata(
+                url=mask_url,
+                width=result["image"]["width"],
+                height=result["image"]["height"],
+            ),
+            acquisition=acquisition,
+        )
+    finally:
+        if after_image is not None:
+            await after_image.close()
+
+
+@app.get("/api/flood-analysis/mask/{mask_id}")
+def flood_analysis_mask(mask_id: str) -> Response:
+    if not re.fullmatch(r"[a-f0-9]{32}", mask_id):
+        raise HTTPException(status_code=404, detail="Flood mask expired or is unavailable.")
+    mask = get_cached_flood_mask(mask_id)
+    if not mask:
+        raise HTTPException(status_code=404, detail="Flood mask expired or is unavailable.")
+    return Response(
+        content=mask,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/fire-hotspots", response_model=FireHotspotResponse)
+async def fire_hotspots(request: FireHotspotRequest) -> FireHotspotResponse:
+    """Return NASA FIRMS active-fire detections for the exact confirmed bounds."""
+    bounds = (request.west, request.south, request.east, request.north)
+    try:
+        result = await run_in_threadpool(fetch_fire_hotspots, bounds)
+    except FireHotspotError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return FireHotspotResponse(
+        source=FireHotspotSource(**result["source"]),
+        bounds=FireHotspotBounds(**request.model_dump()),
+        detectionCount=len(result["detections"]),
+        detections=[FireHotspotDetection(**detection) for detection in result["detections"]],
     )
 
 

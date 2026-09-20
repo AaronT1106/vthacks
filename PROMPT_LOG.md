@@ -1266,3 +1266,168 @@ Fix valid real-location routes that reported `Road-network route unavailable`, i
 - `npm run lint`: passed.
 - `npm run build`: passed after rerunning outside the restricted sandbox because the initial TypeScript worker returned `spawn EPERM`.
 - `git diff --check`: passed; only Windows line-ending notices were reported.
+
+---
+
+## Real SegFormer-B0 Flood/Water Segmentation — 2026-09-19
+
+### Request
+
+Add the first real computer-vision capability by running a flood-specific SegFormer
+checkpoint on the exact selected After image, returning valid-pixel coverage and an
+aligned mask without changing satellite selection or routing behavior.
+
+### Files Changed
+
+- Added `backend/flood_segmentation.py`, `backend/test_flood_segmentation.py`, and
+  `frontend/src/lib/flood-analysis.ts`.
+- Updated `backend/main.py`, `backend/satellite_imagery.py`,
+  `backend/requirements.txt`, `backend/.env.example`, `backend/test_main.py`,
+  `frontend/src/components/disaster-analysis-step.tsx`, `frontend/next.config.ts`,
+  `README.md`, and `PROMPT_LOG.md`.
+
+### Implemented
+
+- Added `POST /api/analyze-flood` for either a manual After file or the exact cached
+  Sentinel-2 After preview and `GET /api/flood-analysis/mask/{id}` for temporary masks.
+- Added lazy, cached SegFormer-B0 loading for
+  `gdurkin/segformer-b0-finetuned-segments-floods-S2` at revision
+  `f94b7a0254011883dc17f04d88355f8e7adc5263`, with CUDA, compatible MPS, and CPU
+  device handling.
+- Uses the checkpoint processor, inference mode, runtime water-class discovery,
+  original-size logit interpolation, invalid-pixel exclusion, exact mask dimensions,
+  and mathematically derived flood/water coverage.
+- Preserves satellite scene ID, capture time, cloud cover, bounds, provider, and live
+  mode with the analyzed pixels. Manual analysis uses the exact uploaded After file.
+- Added a restrained cyan overlay, model/image details, explicit water-versus-flood
+  limitation, and a separate transition to the unchanged mock route workflow.
+- Restored tracked Copernicus example credentials to placeholders. The exposed OAuth
+  client secret must be rotated manually.
+
+### Decisions
+
+- SegFormer-B0 replaced B1 because no defensible flood-specific B1 checkpoint was
+  available and the user approved B0.
+- The cached three-channel Process API PNG is used because it is the exact image shown
+  to the user and matches the checkpoint's RGB processor. The existing 16-bit GeoTIFF
+  preparation path remains unchanged for future multispectral work.
+- `transformers` is pinned to 4.46.3. A Python 3.12 smoke environment showed that the
+  current unbounded 5.x release requires the out-of-scope `torchvision` package for
+  `AutoImageProcessor`; 4.46.3 loads this checkpoint with only the approved dependencies.
+- No before/after change detection, tiled inference, confidence fabrication, physical
+  area estimate, hazard generation, Mapbox polygon, or routing integration was added.
+
+### Validation
+
+- Backend `python -m unittest -v`: 44 tests passed; normal tests mock inference and do
+  not download model weights.
+- `python -m py_compile`: passed for the backend application, satellite module, and
+  flood module.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: the default Turbopack build could not create its CSS worker socket in
+  this environment. `npm run build -- --webpack` passed, including compilation,
+  TypeScript checking, page generation, and trace collection.
+- Python 3.12 real-checkpoint smoke test passed on CPU after the first download. Using
+  the existing local 2048 x 1024 NASA RGB image solely as a pipeline test, the processor
+  produced a 512 x 512 input, logits shaped `[1, 3, 128, 128]`, and a 2048 x 1024 mask
+  in approximately 2.94 seconds. The reported 85.64% water result is not scientifically
+  meaningful because the smoke image is not a Sentinel-2 flood scene.
+- `git diff --check`, conflict-marker scanning, and credential-pattern scanning passed.
+- Browser/WebGL interaction and overlay-alignment checks remain pending because no
+  controllable browser was available. A local frontend server was already running at
+  `http://localhost:3000`; no existing process was terminated.
+
+---
+
+## NASA FIRMS Active-Fire Hotspots — 2026-09-19
+
+### Request
+
+Add a separate real NASA FIRMS VIIRS NOAA-21 active-fire analysis for the confirmed
+incident bounds while preserving SegFormer flood analysis and the unchanged mock Route
+workflow.
+
+### Files Changed
+
+- Added `backend/fire_hotspots.py`, `backend/test_fire_hotspots.py`, and
+  `frontend/src/lib/fire-hotspots.ts`.
+- Updated `backend/main.py`, `backend/.env.example`, `backend/test_main.py`,
+  `frontend/src/components/disaster-analysis-step.tsx`, `frontend/next.config.ts`,
+  `README.md`, and `PROMPT_LOG.md`.
+
+### Implemented
+
+- Added `POST /api/fire-hotspots`, using the exact confirmed west, south, east, and
+  north coordinates with the server-only NASA FIRMS Area API configuration.
+- Added standard-library CSV/network parsing for `VIIRS_NOAA21_NRT`, preserving
+  coordinates, raw confidence category, FRP, acquisition time, satellite, instrument,
+  brightness, footprint, version, and day/night fields without inventing severity,
+  acreage, or confidence percentages.
+- Treats a header-only CSV as a successful zero-detection response and rejects malformed,
+  out-of-bounds, authentication, timeout, HTTP, and network responses with safe errors.
+- Added independent flood and fire request/result state, a restrained FIRMS result panel,
+  retry and abort behavior, accurate zero-result and human-verification wording, and an
+  either-analysis Route gate.
+- Fire-only progression uses the existing neutral selected-area handoff. FIRMS detections
+  are not converted into route hazards, map points, heatmaps, combined scores, or routing
+  penalties.
+- Added the FIRMS proxy and placeholder configuration while keeping the real MAP_KEY in
+  ignored `backend/.env`. Existing Copernicus and flood example settings were preserved.
+- Added no Python or frontend dependency. Future Route visualization fields are
+  `latitude`, `longitude`, `frp`, `confidence`, and `acquiredAt`.
+
+### Validation
+
+- Nine pure FIRMS unit tests passed, covering configuration, exact coordinate order,
+  CSV normalization, nullable values, timestamps, zero results, malformed data, provider
+  failures, safe logging, and the mocked network boundary.
+- Full TestClient collection could not run because the existing FastAPI/Starlette
+  installation requires the absent `httpx2` test package. No package was installed or
+  added for this task; application import and endpoint registration passed.
+- A redacted live NOAA-21 smoke test and direct FastAPI-handler test passed for the exact
+  Blacksburg test bounds, returning a valid success response with zero detections. No key
+  or secret-containing URL was printed or logged.
+- `npm run lint` and `npx tsc --noEmit`: passed.
+- The standard `npm run build` hit the known Turbopack CSS-worker port restriction;
+  `npm run build -- --webpack` passed, including TypeScript and static generation.
+- Browser-only loading, retry, zero-result layout, and navigation checks remain pending
+  because no controllable browser was available.
+
+---
+
+## Road Routing, Flood, and Fire Rebase Integration — 2026-09-19
+
+### Request
+
+Resolve the active rebase manually without losing either the real OSM road-network
+routing work or the SegFormer flood and NASA FIRMS active-fire work.
+
+### Files Changed
+
+- `backend/main.py`
+- `backend/.env.example`
+- `PROMPT_LOG.md`
+
+### Implemented
+
+- Preserved the real road-network request models, GeoJSON route response, OSMnx and
+  NetworkX routing endpoint, role-specific hazard weighting, and failure handling.
+- Preserved the satellite, damage transport, flood analysis, flood-mask, and NASA
+  FIRMS endpoints and their supporting models and imports.
+- Kept both road-routing and flood/fire development histories in this log.
+- Replaced tracked Copernicus example credentials with non-secret placeholders while
+  leaving the ignored local environment file untouched.
+
+### Validation
+
+- `python -m py_compile` passed for the merged application, road routing, satellite,
+  flood, and fire modules.
+- The backend test suite could not import because the active `.venv` does not contain
+  the already-declared `osmnx` dependency. No packages were installed during conflict
+  resolution because the task explicitly prohibited it.
+- `npm run lint` and `npx tsc --noEmit`: passed.
+- The default Turbopack build hit its known CSS-worker port-binding restriction;
+  `npm run build -- --webpack` passed, including compilation, TypeScript checking,
+  static generation, and trace collection.
+- `git diff --check` and the repository conflict-marker scan passed.

@@ -171,6 +171,8 @@ Uncertain detections must not be presented as confirmed hazards. High-impact rec
 - OpenCV
 - NumPy
 - Pillow
+- PyTorch
+- Transformers 4.46.3
 - NetworkX
 - OSMnx
 - Supabase
@@ -236,14 +238,17 @@ Run both servers before using Analyze route. Restart Next.js after changing its 
 
 ```powershell
 cd backend
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-The frontend proxies `/api/analyze-route`, `/api/satellite-imagery`, and
-`/api/analyze-damage` to
+On macOS or Linux, create and activate the same Python 3.12 environment with
+`python3.12 -m venv .venv` and `source .venv/bin/activate`.
+
+The frontend proxies `/api/analyze-route`, `/api/satellite-imagery`,
+`/api/analyze-damage`, `/api/analyze-flood`, `/api/fire-hotspots`, and generated preview/mask URLs to
 `http://127.0.0.1:8000`.
 For a different backend address, set `BACKEND_URL` in the frontend server's environment
 before starting/building Next.js. Browser requests use the same frontend origin;
@@ -312,11 +317,9 @@ No road-network routing, live hazard analysis, LLM inference, or dispatch is per
 Human verification is required before operational use. Request failures are shown
 in the results panel with a retry instruction; there is no silent local-result fallback.
 
-After a successful imagery transport receipt, the frontend creates a clearly labeled,
-deterministic demo damage-analysis result for the confirmed bounds. Step 4 reuses the
-existing route dashboard and API, displays the potential hazards, and passes their
-names and selected bounds into the mock route explanation. This is not computer-vision
-damage detection.
+The Analysis step can now run real flood/water segmentation on the selected After
+image. Route planning remains a separate mock workflow: its demo hazards are not
+generated from the segmentation mask and are not real computer-vision detections.
 
 Run backend checks from `backend/` with `python -m unittest -v`.
 
@@ -363,9 +366,9 @@ its requested date, actual capture time, scene ID, and cloud cover, and the fron
 rechecks pair eligibility before enabling detailed comparison.
 
 Sentinel-2 provides higher-resolution local-area context than the previous wide-area
-provider, but this MVP still creates deterministic mock findings rather than running
-computer vision. It does not claim that individual road or building damage is certain;
-human verification is required. See the
+provider. The flood model can analyze the selected After scene, but other damage
+findings and routing hazards remain deterministic mock data. It does not claim that
+individual road or building damage is certain; human verification is required. See the
 [Copernicus Sentinel Hub Catalog API](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Catalog.html),
 [Sentinel-2 L2A documentation](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S2L2A.html),
 and [authentication guide](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Overview/Authentication.html).
@@ -408,9 +411,9 @@ only. It does not read or persist image bytes, compare imagery, run a model,
 detect damage, generate hazards, or update routes.
 
 Sentinel-2 sessions validate the generated preview references through
-`POST /analyze-damage/satellite`; manual files use the multipart endpoint. Both
-paths produce clearly labeled demo findings after transport validation. Neither path
-performs real computer-vision damage detection.
+`POST /analyze-damage/satellite`; manual files use the multipart endpoint. Those
+legacy endpoints still verify transport or prepare rasters. Real flood/water inference
+uses the separate `/api/analyze-flood` contract described below.
 
 For a validated Sentinel-2 pair, the satellite endpoint now also requests separate
 16-bit analysis GeoTIFFs from the Copernicus Process API. These rasters retain the
@@ -424,6 +427,78 @@ pixel size instead of claiming native 10 m detail.
 This is raster preparation only. The application does not yet tile these GeoTIFFs,
 run RF-DETR, calculate spectral indices, detect hazards, or geolocate detections. The
 frontend's resulting hazards remain explicitly labeled demo data.
+
+### Flood/Water Segmentation
+
+`POST /api/analyze-flood` runs a real SegFormer-B0 semantic-segmentation model on the
+selected **After** image. Satellite requests resolve the exact Process API PNG already
+held in the backend preview cache; manual requests send the exact local After file.
+No second satellite scene is fetched for inference.
+
+The configured checkpoint is
+`gdurkin/segformer-b0-finetuned-segments-floods-S2`, pinned to revision
+`f94b7a0254011883dc17f04d88355f8e7adc5263`. It was fine-tuned from MiT-B0 on the
+author's `gdurkin/flood_dataset_S2` dataset and exposes `invalid`, `not water`, and
+`water` classes. The associated processor resizes RGB input to `512 x 512`; logits are
+resized back to the original image dimensions before the final class mask is created.
+
+Install backend dependencies with Python 3.12. Transformers is pinned to 4.46.3 so the
+approved PyTorch/Transformers dependency set can load this checkpoint without adding a
+separate torchvision dependency. On first real use, Hugging Face downloads
+the checkpoint into its normal user cache outside this repository. The backend loads the
+processor and model lazily, reuses them across requests, prefers CUDA, tries compatible
+Apple MPS, and otherwise runs on CPU. Normal unit tests mock this boundary and never
+download weights.
+
+The endpoint accepts multipart fields `source`, `west`, `south`, `east`, and `north`.
+Manual requests also provide `after_image`; satellite requests provide the generated
+`after_preview_id`. It returns original image dimensions, processor dimensions, raw
+logit shape, valid/water/invalid pixel counts, percentage coverage, model/device details,
+exact acquisition metadata, and a temporary PNG mask URL. Mask bytes remain in backend
+memory for one hour.
+
+The displayed percentage means the share of valid analyzed pixels classified as
+`water`. Because Phase 1 analyzes only the After image, it cannot reliably distinguish
+permanent water from new inundation. Cloud, shadow, and domain-shift errors are also
+possible. The overlay is a potential flood/water indicator for human review, not a
+confirmed flood boundary or a physical-area estimate. Large-area tiled inference,
+before/after change detection, hazard creation, and routing integration remain future
+work. The checkpoint's model card has limited documentation and an unspecified license,
+so licensing and independent validation are required before production use.
+
+### NASA FIRMS Active-Fire Hotspots
+
+`POST /api/fire-hotspots` checks the exact confirmed incident bounding box against the
+NASA FIRMS Area API. The server sends coordinates in `west,south,east,north` order and
+uses the `VIIRS_NOAA21_NRT` product with a one-day query window by default. The browser
+never receives the FIRMS MAP_KEY or a secret-containing provider URL.
+
+Configure the ignored `backend/.env` file with:
+
+```text
+NASA_FIRMS_MAP_KEY=your_real_local_key
+NASA_FIRMS_SOURCE=VIIRS_NOAA21_NRT
+NASA_FIRMS_DAY_RANGE=1
+```
+
+The endpoint returns normalized satellite active-fire detections containing their
+latitude, longitude, observation date/time, satellite, instrument, preserved FIRMS
+confidence category, brightness values, scan/track footprint values, version, day/night
+flag, and Fire Radiative Power (FRP) when NASA supplies them. FRP describes detected
+radiative energy; DisasterLens does not convert it into an invented danger, severity,
+acreage, or confidence percentage.
+
+Each FIRMS row is a hotspot observation, not a unique wildfire. Several rows can belong
+to the same fire, and older observations do not prove that a fire is currently burning.
+A zero-row response means only that NASA FIRMS returned no active-fire detections for
+the selected area and time window; satellite timing, clouds, visibility, coverage, and
+detection thresholds can affect results.
+
+Flood and fire remain separate analysis sources. FIRMS coordinates, FRP, confidence,
+and acquisition timestamps are retained for a future Route heatmap, but Phase 2 does
+not add map points, clustering, combined hazard scores, routing penalties, or route
+changes. See the [NASA FIRMS Area API](https://firms.modaps.eosdis.nasa.gov/api/area/)
+for the provider contract.
 
 ## Stretch Features
 

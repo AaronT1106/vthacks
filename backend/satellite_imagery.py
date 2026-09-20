@@ -25,7 +25,10 @@ PROCESS_URL = "https://sh.dataspace.copernicus.eu/api/v1/process"
 PREVIEW_TTL_SECONDS = 3600
 MAX_CACHED_PREVIEWS = 12
 MAX_CACHED_ANALYSIS_RASTERS = 4
-_preview_cache: dict[str, tuple[float, bytes, str, tuple[float, float, float, float], str, str]] = {}
+_preview_cache: dict[
+    str,
+    tuple[float, bytes, str, tuple[float, float, float, float], str, str, float | None],
+] = {}
 _analysis_raster_cache: dict[str, tuple[float, bytes]] = {}
 logger = logging.getLogger(__name__)
 
@@ -263,7 +266,7 @@ def prepare_analysis_raster(preview_id: str) -> dict[str, Any]:
         raise ProviderUnavailableError(
             "preview_image_fetch_failed", "analysis-raster", "Selected Sentinel-2 preview expired before raster preparation."
         )
-    _, _, bbox, scene_id, capture_date = cached
+    _, _, bbox, scene_id, capture_date, _ = cached
     width, height, resolution_meters = _analysis_dimensions(bbox)
     token = _access_token()
     payload = {
@@ -332,10 +335,15 @@ def prepare_analysis_raster(preview_id: str) -> dict[str, Any]:
 
 
 def _cache_preview(
-    image: bytes, content_type: str, bbox: list[float], scene_id: str, capture_date: str
+    image: bytes,
+    content_type: str,
+    bbox: list[float],
+    scene_id: str,
+    capture_date: str,
+    cloud_coverage: float | None = None,
 ) -> str:
     now = time.time()
-    for key, (created, _, _, _, _, _) in list(_preview_cache.items()):
+    for key, (created, _, _, _, _, _, _) in list(_preview_cache.items()):
         if now - created > PREVIEW_TTL_SECONDS:
             _preview_cache.pop(key, None)
     while len(_preview_cache) >= MAX_CACHED_PREVIEWS:
@@ -343,7 +351,15 @@ def _cache_preview(
         _preview_cache.pop(oldest, None)
     preview_id = uuid.uuid4().hex
     try:
-        _preview_cache[preview_id] = (now, image, content_type, tuple(bbox), scene_id, capture_date)
+        _preview_cache[preview_id] = (
+            now,
+            image,
+            content_type,
+            tuple(bbox),
+            scene_id,
+            capture_date,
+            cloud_coverage,
+        )
     except (MemoryError, TypeError, ValueError) as error:
         raise ProviderUnavailableError(
             "preview_url_generation_failed", "preview-cache", "A temporary preview URL could not be generated."
@@ -354,12 +370,12 @@ def _cache_preview(
 
 def get_cached_preview(
     preview_id: str,
-) -> tuple[bytes, str, tuple[float, float, float, float], str, str] | None:
+) -> tuple[bytes, str, tuple[float, float, float, float], str, str, float | None] | None:
     cached = _preview_cache.get(preview_id)
     if not cached or time.time() - cached[0] > PREVIEW_TTL_SECONDS:
         _preview_cache.pop(preview_id, None)
         return None
-    return cached[1], cached[2], cached[3], cached[4], cached[5]
+    return cached[1], cached[2], cached[3], cached[4], cached[5], cached[6]
 
 
 def _metadata(
@@ -403,7 +419,12 @@ def _render_metadata_options(
         )
         options.append(_metadata(
             scene, bbox, requested_date, _cache_preview(
-                image, content_type, bbox, scene["id"], scene["properties"]["datetime"]
+                image,
+                content_type,
+                bbox,
+                scene["id"],
+                scene["properties"]["datetime"],
+                cloud,
             ),
             candidate_count, requires_confirmation,
         ))

@@ -25,6 +25,18 @@ const nextConfig: NextConfig = {
         source: "/api/analyze-damage",
         destination: `${normalizedBackendUrl}/analyze-damage`,
       },
+      {
+        source: "/api/analyze-flood",
+        destination: `${normalizedBackendUrl}/api/analyze-flood`,
+      },
+      {
+        source: "/api/flood-analysis/mask/:path*",
+        destination: `${normalizedBackendUrl}/api/flood-analysis/mask/:path*`,
+      },
+      {
+        source: "/api/fire-hotspots",
+        destination: `${normalizedBackendUrl}/api/fire-hotspots`,
+      },
     ];
   },
 };

@@ -429,6 +429,11 @@ class RouteAnalysisTests(unittest.TestCase):
         self.assertIn('source: "/api/satellite-imagery"', config)
         self.assertIn('source: "/api/satellite-imagery/preview/:path*"', config)
         self.assertIn('destination: `${normalizedBackendUrl}/api/satellite-imagery/preview/:path*`', config)
+        self.assertIn('source: "/api/analyze-flood"', config)
+        self.assertIn('destination: `${normalizedBackendUrl}/api/analyze-flood`', config)
+        self.assertIn('source: "/api/flood-analysis/mask/:path*"', config)
+        self.assertIn('source: "/api/fire-hotspots"', config)
+        self.assertIn('destination: `${normalizedBackendUrl}/api/fire-hotspots`', config)
 
     @patch("satellite_imagery.urlopen")
     def test_process_api_renders_exact_scene_as_ten_meter_png_preview(self, urlopen):
